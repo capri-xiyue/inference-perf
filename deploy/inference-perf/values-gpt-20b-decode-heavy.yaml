@@ -42,29 +42,86 @@ token:
   hfToken: ""
 
 config:
-  load:
-    type: constant
-    stages:
-    - rate: 1
-      duration: 30
   api:
     type: completion
-  server:
-    type: vllm
-    base_url: http://0.0.0.0:8000
-    ignore_eos: true
+    streaming: true
   data:
-    type: shareGPT
-  metrics:
-    type: prometheus
-    prometheus:
-      url: http://localhost:9090
-      scrape_interval: 15
+    type: random
+    path: null
+    input_distribution:
+      min: 300
+      max: 300
+      mean: 300.0
+      std_dev: 0
+      total_count: 12120
+    output_distribution:
+      min: 2000
+      max: 2000
+      mean: 2000
+      std_dev:
+      total_count: 12120
+    shared_prefix: null
+    trace: null
+  load:
+    type: concurrent
+    interval: 3.0
+    stages:
+      - num_requests: 160
+        concurrency_level: 8
+      - num_requests: 320
+        concurrency_level: 16
+      - num_requests: 640
+        concurrency_level: 32
+      - num_requests: 1000
+        concurrency_level: 64
+      - num_requests: 2000
+        concurrency_level: 128
+      - num_requests: 3000
+        concurrency_level: 256
+      - num_requests: 5000
+        concurrency_level: 512
+    sweep: null
+    num_workers: 50
+    worker_max_concurrency: 0
+    worker_max_tcp_connections: 2500
+    trace: null
+    circuit_breakers: [ ]
+    request_timeout: null
+    lora_traffic_split: null
+  metrics: null
   report:
     request_lifecycle:
       summary: true
       per_stage: true
-      per_request: false
+      per_request: true
+      per_adapter: true
+      per_adapter_stage: false
+      percentiles:
+        - 0.1
+        - 1.0
+        - 5.0
+        - 10.0
+        - 25.0
+        - 50.0
+        - 75.0
+        - 90.0
+        - 95.0
+        - 99.0
+        - 99.9
     prometheus:
       summary: true
       per_stage: false
+  storage:
+    local_storage:
+      path: /reports/decode-heavy
+      report_file_prefix: null
+  server:
+    type: vllm
+    model_name: openai/gpt-oss-20b
+    base_url: http://0.0.0.0
+    ignore_eos: true
+    api_key: null
+    cert_path: null
+    key_path: null
+  tokenizer: null
+  circuit_breakers: null
