@@ -4,7 +4,7 @@ job:
     repository: quay.io/inference-perf/inference-perf
     tag: "" # Defaults to .Chart.AppVersion
   nodeSelector: {}
-  serviceAccountName: ""
+  serviceAccountName: "workload-identity-k8s-sa"
   # Example resources:
   # resources:
   #   requests:
@@ -51,14 +51,14 @@ config:
     input_distribution:
       min: 300
       max: 300
-      mean: 300.0
-      std_dev: 0.0
+      mean: 300
+      std_dev: 0
       total_count: 12120
     output_distribution:
-      min: 1000
-      max: 1000
-      mean: 1000
-      std_dev: 0.0
+      min: 3000
+      max: 3000
+      mean: 3000
+      std_dev: 0
       total_count: 12120
     shared_prefix: null
     trace: null
@@ -117,7 +117,7 @@ config:
       report_file_prefix: null
   server:
     type: vllm
-    model_name: openai/gpt-oss-20b
+    model_name: openai/gpt-oss-120b
     base_url: http://0.0.0.0
     ignore_eos: true
   tokenizer: null

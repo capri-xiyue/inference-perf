@@ -4,7 +4,7 @@ job:
     repository: quay.io/inference-perf/inference-perf
     tag: "" # Defaults to .Chart.AppVersion
   nodeSelector: {}
-  serviceAccountName: ""
+  serviceAccountName: "workload-identity-k8s-sa"
   # Example resources:
   # resources:
   #   requests:
@@ -49,40 +49,29 @@ config:
     type: random
     path: null
     input_distribution:
-      min: 300
-      max: 300
-      mean: 300.0
-      std_dev: 0.0
-      total_count: 12120
+      min: 8000
+      max: 8000
+      mean: 8000
+      std_dev: 0
     output_distribution:
       min: 1000
       max: 1000
       mean: 1000
-      std_dev: 0.0
-      total_count: 12120
+      std_dev: 0
     shared_prefix: null
     trace: null
   load:
-    type: concurrent
-    interval: 3.0
+    type: constant
     stages:
-      - num_requests: 160
-        concurrency_level: 8
-      - num_requests: 320
-        concurrency_level: 16
-      - num_requests: 640
-        concurrency_level: 32
-      - num_requests: 1000
-        concurrency_level: 64
-      - num_requests: 2000
-        concurrency_level: 128
-      - num_requests: 3000
-        concurrency_level: 256
-      - num_requests: 5000
-        concurrency_level: 512
+    - rate: 10
+      duration: 120
+    - rate: 30
+      duration: 120
+    - rate: 50
+      duration: 120
     sweep: null
     num_workers: 50
-    worker_max_concurrency: 0
+    worker_max_concurrency: 10000
     worker_max_tcp_connections: 2500
     trace: null
     circuit_breakers: [ ]
@@ -93,7 +82,6 @@ config:
     request_lifecycle:
       summary: true
       per_stage: true
-      per_request: true
       per_adapter: true
       per_adapter_stage: false
       percentiles:
@@ -109,15 +97,15 @@ config:
         - 99.0
         - 99.9
     prometheus:
-      summary: true
+      summary: false
       per_stage: false
   storage:
     local_storage:
-      path: /reports/decode-heavy
+      path: /reports/both-heavy
       report_file_prefix: null
   server:
     type: vllm
-    model_name: openai/gpt-oss-20b
+    model_name: openai/gpt-oss-120b
     base_url: http://0.0.0.0
     ignore_eos: true
   tokenizer: null
