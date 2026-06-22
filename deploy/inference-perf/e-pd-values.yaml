@@ -49,25 +49,22 @@ config:
     type: constant
     interval: 60.0
     stages:
-      # Warmup — seat residents (~1×S)
       - rate: 5
-        duration: 600            # 5*600  = 3000
-
-      # Main ladder
-      - rate: 5
-        duration: 100
+        duration: 60
       - rate: 10
-        duration: 100
+        duration: 60
       - rate: 15
-        duration: 100
+        duration: 60
       - rate: 20
-        duration: 100
+        duration: 60
       - rate: 25
-        duration: 100
+        duration: 60
       - rate: 30
-        duration: 100
+        duration: 60
       - rate: 35
-        duration: 100
+        duration: 60
+      - rate: 40
+        duration: 60
   api:
     type: chat
     streaming: true
@@ -78,21 +75,26 @@ config:
   tokenizer:
     pretrained_model_name_or_path: Qwen/Qwen3-VL-32B-Instruct
   data:
-    type: shared_prefix
-    shared_prefix:
-      multimodal:
-        image:
-          count: { type: fixed, min: 4, max: 4, mean: 4 }  # items per request, mean: 4 }  # items per request
-          insertion_point: 0.0
-          resolutions:
-            - resolution: "720p"
-              weight: 1
-      num_groups: 600
-      num_prompts_per_group: 5
-      system_prompt_len: 100
-      question_len: 1200
-      output_len: 300
-      enable_multi_turn_chat: false
+    type: synthetic
+    input_distribution:
+      min: 10
+      max: 100
+      mean: 50
+      std_dev: 50
+      total_count: 10800
+    output_distribution:
+      min: 100
+      max: 300
+      mean: 200
+      std_dev: 50
+      total_count: 10800
+    multimodal:
+      image:
+       count: { type: uniform, min: 1, max: 3, mean: 2 }
+       insertion_point: 1.0
+       resolutions:
+         - resolution: "720p"
+           weight: 1
   report:
     request_lifecycle:
       summary: true

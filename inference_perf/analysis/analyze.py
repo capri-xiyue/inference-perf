@@ -479,7 +479,7 @@ def analyze_reports(report_dirs: List[str], analysis_dir: Optional[str] = None) 
         analysis_path = Path(analysis_dir)
 
         # Creating a legend file in the analysis path with list of report paths analyzed
-        report_names = [f"Report {idx + 1}" for idx in range(len(chartset.keys()))]
+        report_names = ['svc', 'approximate-cache', 'precise-cache-default','precise-cache-mm-120s', 'precise-cache-mm-120s-cpu-unlimited']
         report_legend_dict = {f"Report {idx + 1}": str(path) for idx, path in enumerate(chartset.keys())}
         with open(analysis_path / "analyzed_reports_legend.json", "w") as f:
             json.dump(report_legend_dict, f, indent=2)
