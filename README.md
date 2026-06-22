@@ -28,7 +28,7 @@ It was founded as a part of the inference benchmarking and metrics standardizati
 - **Automatic Visualization**: Generate charts for QPS vs Latency/Throughput/Goodput. See [analysis.md](./docs/analysis.md).
 
 ### 🧠 Smart Data Generation
-- **Real-world Datasets**: Support for ShareGPT, CNN DailyMail, Infinity Instruct and Billsum.
+- **Real-world Datasets**: Support for ShareGPT, CNN DailyMail, Infinity Instruct, Billsum, and the VisionArena image dataset.
 - **Synthetic & Random**: Configure exact input/output distributions.
 - **Advanced Scenarios**: Shared prefix and multi-turn chat conversations.
 - **Multimodal**: Synthetic image, video, and audio payloads with per-modality reporting. Resolutions/profiles/durations are passed through as-is; pick values within your model's accepted range. See [docs/config.md](docs/config.md#multimodal-data-generation).
@@ -96,6 +96,7 @@ Explore detailed documentation for specific topics:
 | **Reports** | Understanding generated JSON reports. | [reports.md](./docs/reports.md) |
 | **OTel Observability** | Instrument benchmark runs with OpenTelemetry tracing to export to Jaeger, Tempo, etc. | [otel_instrumentation.md](./docs/otel_instrumentation.md) |
 | **OTel Trace Replay** | Data/load type for replaying production traces with complex dependency graphs. | [otel_trace_replay.md](./docs/otel_trace_replay.md) |
+| **Weka Trace Replay** | Data/load type for replaying raw Weka agent traces via graph-based session execution. | [weka_trace_replay.md](./docs/weka_trace_replay.md) |
 | **Conversation Replay** | Data/load type for benchmarking concurrent multi-turn agentic conversations with configurable distributions. | [conversation_replay.md](./docs/conversation_replay.md) |
 | **Analysis** | Visualizations and plots for performance metrics. | [analysis.md](./docs/analysis.md) |
 
@@ -105,7 +106,7 @@ Explore detailed documentation for specific topics:
 
 We welcome contributions! Please join us:
 
-- **Slack**: [#inference-perf](https://kubernetes.slack.com/?redir=%2Fmessages%2Finference-perf) channel in Kubernetes workspace.
+- **Slack**: [#inference-perf](https://kubernetes.slack.com/?redir=%2Fmessages%2Finference-perf) channel in [Kubernetes workspace](https://slack.k8s.io/).
 - **Community Meeting**: Weekly on Thursdays alternating between 09:00 and 11:30 PDT.
 - **Code of Conduct**: Governed by the [Kubernetes Code of Conduct](code-of-conduct.md).
 

@@ -76,7 +76,7 @@ from rich.progress import (
 )
 import signal
 
-from inference_perf.logger import get_console
+from inference_perf.observability.logging import get_console
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +277,10 @@ class Worker(mp.Process):
         # Seed with current time + worker id to ensure unique random sequences per worker
         seed = (self.base_seed + self.id) % 2**32
         np.random.seed(seed)
+        # Also reseed any np.random.Generator on the datagen (e.g. RandomDataGenerator.rng),
+        # since np.random.seed() only affects the legacy module, not Generator instances.
+        if hasattr(self.datagen, "rng") and isinstance(self.datagen.rng, np.random.Generator):
+            self.datagen.rng = np.random.default_rng(seed)
         logger.debug(f"[Worker {self.id}] seeded numpy with {seed} and base seed {self.base_seed}")
 
         # Ignore SIGINT in workers to prevent multiple calls to SIGINT handler
@@ -545,9 +549,10 @@ class LoadGenerator:
                 if worker_id >= 0:
                     worker_id = worker_id % active_workers
 
-                # Stamp session_id and OTEL context so workers can use them
+                # Stamp session_id, OTEL context, and stage_id so workers/generators can use them
                 lazy_data.session_id = session_id
                 lazy_data.otel_context = context_dict  # Embed OTEL context in data
+                lazy_data.stage_id = stage_id
 
                 event_time = time.perf_counter()
                 queue_data = RequestQueueData(stage_id, lazy_data, event_time, lora_adapter)
@@ -772,6 +777,7 @@ class LoadGenerator:
 
         for _ in range(num_requests):
             request_data = next(data_generator)
+            request_data.stage_id = stage_id
             lora_adapter = self._get_lora_adapter()
             worker_id = request_data.preferred_worker_id
             if worker_id >= 0:
@@ -1112,6 +1118,7 @@ class LoadGenerator:
                     for count, (data, time_index) in enumerate(zip(self.datagen.get_data(), time_generator, strict=True)):
                         if progress and stage_task:
                             progress.update(stage_task, completed=count + 1)
+                        data.stage_id = stage_id
                         request_data = LazyLoadDataMixin.get_request(self.datagen, data)
                         lora_adapter = self._get_lora_adapter()
                         if cb := next((cb for cb in self.circuit_breakers if cb.is_open()), None):

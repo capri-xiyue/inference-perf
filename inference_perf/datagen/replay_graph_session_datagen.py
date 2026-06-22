@@ -36,6 +36,7 @@ from aiohttp import ClientResponse
 
 from inference_perf.apis import (
     ChatCompletionAPIData,
+    ErrorResponseInfo,
     InferenceInfo,
     LazyLoadInferenceAPIData,
     SessionLifecycleMetric,
@@ -227,6 +228,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
     # KV-cache invalidation configuration
     inject_random_session_id: bool = False
     session_random_string: Optional[str] = None
+    override_tool_call_max_tokens: bool = False
 
     async def to_request_body(
         self, effective_model_name: str, max_tokens: int, ignore_eos: bool, streaming: bool
@@ -234,12 +236,13 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
         payload = await super().to_request_body(effective_model_name, max_tokens, ignore_eos, streaming)
 
         if self.expected_output_is_tool_call and self.tool_definitions:
-            payload["ignore_eos"] = False
-            # The recorded output_tokens might come from a different model/tokenizer.
-            # The replay model may need significantly more tokens to express the
-            # same tool call (different tokenizer, different tool-call preamble).
-            # Use a generous cap and let ignore_eos=False stop generation naturally.
-            payload["max_tokens"] = max(payload.get("max_tokens", 0) * 4, 4096)
+            if self.override_tool_call_max_tokens:
+                payload["ignore_eos"] = False
+                # The recorded output_tokens might come from a different model/tokenizer.
+                # The replay model may need significantly more tokens to express the
+                # same tool call (different tokenizer, different tool-call preamble).
+                # Use a generous cap and let ignore_eos=False stop generation naturally.
+                payload["max_tokens"] = max(payload.get("max_tokens", 0) * 4, 4096)
 
             if "tool_choice" in payload:
                 logger.warning(
@@ -292,6 +295,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                 "session_id": session_id,
                 "completion_time": completion_time,
                 "failed": True,
+                "failure_reason": reason,
                 "cancelled_events": cancelled,
                 "event_completion_times": self.worker_tracker.get_session_completion_times(session_id),
             }
@@ -316,6 +320,9 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                 )
             except EventFailedError:
                 self._fail_and_notify(session_id, "predecessor failed")
+                return
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                self._fail_and_notify(session_id, f"predecessor wait failed: {type(e).__name__}")
                 return
             logger.debug(f"Event {self.event_id} all predecessors done")
 
@@ -432,13 +439,13 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                                 f"Event {self.event_id}: substituted output segment with text output from {seg.source_event_id}"
                             )
                         else:
-                            logger.warning(
+                            logger.debug(
                                 f"Event {self.event_id}: output segment from {seg.source_event_id} "
                                 f"not available, using recorded content"
                             )
                             result.extend(seg_msgs)
                 else:
-                    logger.warning(f"Event {self.event_id}: output segment has no source_event_id, using recorded content")
+                    logger.debug(f"Event {self.event_id}: output segment has no source_event_id, using recorded content")
                     result.extend(seg_msgs)
             elif seg.type == "shared":
                 if seg.source_event_id is None:
@@ -594,10 +601,11 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             return ""
 
         if config.streaming:
-            # Accumulate tool_call chunks alongside text content.
+            # Accumulate tool_call chunks and reasoning_content alongside text content.
             # delta.tool_calls is a list of partial objects; each chunk carries an
             # index that identifies which tool call it belongs to.
             tool_call_chunks: Dict[int, Dict[str, Any]] = {}
+            reasoning_content_chunks: list[str] = []
 
             def _extract_streaming_content(data: Dict[str, Any]) -> Optional[str]:
                 delta = data.get("choices", [{}])[0].get("delta", {})
@@ -616,12 +624,25 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                         tool_call_chunks[idx]["function"]["arguments"] += fn["arguments"]
                     if chunk.get("id"):
                         tool_call_chunks[idx]["id"] = chunk["id"]
+
+                # Accumulate reasoning_content chunks
+                reasoning_chunk = delta.get("reasoning_content")
+                if reasoning_chunk is not None:
+                    reasoning_content_chunks.append(str(reasoning_chunk))
+
                 content = delta.get("content")
                 return str(content) if content is not None else None
 
-            output_text, chunk_times, raw_content, response_chunks, server_usage = await parse_sse_stream(
+            text_content, chunk_times, raw_content, response_chunks, server_usage = await parse_sse_stream(
                 response, extract_content=_extract_streaming_content
             )
+
+            # Combine reasoning_content with output text for the content field
+            reasoning_text = "".join(reasoning_content_chunks) if reasoning_content_chunks else ""
+            if reasoning_text:
+                output_text = reasoning_text + text_content
+            else:
+                output_text = text_content
 
             streaming_output_message: Optional[Dict[str, Any]] = None
             if tool_call_chunks:
@@ -631,6 +652,11 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                     streaming_output_message["content"] = output_text
             else:
                 streaming_output_message = {"role": "assistant", "content": output_text}
+
+            # Keep separate reasoning_content and output_content fields
+            if reasoning_text:
+                streaming_output_message["reasoning_content"] = reasoning_text
+                streaming_output_message["output_content"] = text_content
 
             prompt_text = "".join([_get_text(msg.content) for msg in self.messages if msg.content])
             prompt_len = tokenizer.count_tokens(prompt_text)
@@ -664,14 +690,27 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             tool_calls = None
             if choices:
                 msg_dict = choices[0].get("message", {})
-                output_text = msg_dict.get("content", "") or ""
+                text_content = msg_dict.get("content", "") or ""
                 tool_calls = msg_dict.get("tool_calls")
+                reasoning_content = msg_dict.get("reasoning_content")
+
+                # Combine reasoning_content with output text for the content field
+                if reasoning_content:
+                    output_text = reasoning_content + text_content
+                else:
+                    output_text = text_content
+
                 if tool_calls:
                     output_message = {"role": "assistant", "tool_calls": tool_calls}
                     if output_text:
                         output_message["content"] = output_text
                 else:
                     output_message = {"role": "assistant", "content": output_text}
+
+                # Keep separate reasoning_content and output_content fields
+                if reasoning_content:
+                    output_message["reasoning_content"] = reasoning_content
+                    output_message["output_content"] = text_content
             usage = data.get("usage") or {}
             server_completion_tokens = usage.get("completion_tokens")
             if server_completion_tokens is not None:
@@ -754,6 +793,7 @@ class ReplaySessionState:
     is_active: bool = False
     is_complete: bool = False
     failed: bool = False
+    failure_reason: Optional[str] = None
     cancelled_events: int = 0
     random_string: Optional[str] = None  # Random string for KV-cache invalidation (shared by all events in session)
 
@@ -1037,6 +1077,10 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
         num_events_completed = len(state.completed_events)
         num_events_cancelled = state.cancelled_events if state.failed else 0
 
+        error = None
+        if state.failure_reason:
+            error = ErrorResponseInfo(error_type="SessionReplayError", error_msg=state.failure_reason)
+
         return SessionLifecycleMetric(
             session_id=session_id,
             stage_id=stage_id,
@@ -1047,6 +1091,7 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
             num_events=num_events,
             num_events_completed=num_events_completed,
             num_events_cancelled=num_events_cancelled,
+            error=error,
         )
 
     def activate_session(self, session_id: str) -> None:
@@ -1079,6 +1124,7 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
 
                     completed_state.is_complete = True
                     completed_state.failed = completion_data.get("failed", False)
+                    completed_state.failure_reason = completion_data.get("failure_reason")
                     completed_state.cancelled_events = completion_data.get("cancelled_events", 0)
                     logger.debug(
                         "Session %s marked complete from queue notification (failed=%s)",
@@ -1187,6 +1233,7 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
             # Pass KV-cache invalidation configuration and session random string
             inject_random_session_id=self.replay_config.inject_random_session_id if self.replay_config else False,
             session_random_string=state.random_string if state else None,
+            override_tool_call_max_tokens=self.replay_config.override_tool_call_max_tokens if self.replay_config else False,
         )
 
     def cleanup_session(self, session_id: str) -> None:

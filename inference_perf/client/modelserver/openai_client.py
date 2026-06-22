@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-# http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,7 @@ from inference_perf.apis import (
     ErrorResponseInfo,
     StreamedResponseMetrics,
 )
+from inference_perf.apis.streaming_parser import StreamInterruptedError
 from inference_perf.payloads import RequestMetrics, Text
 from inference_perf.utils import CustomTokenizer
 from .base import ModelServerClient, ModelServerClientSession, PrometheusMetricMetadata
@@ -154,6 +155,15 @@ class openAIModelServerClient(ModelServerClient):
             return []
 
 
+def _update_headers_case_insensitive(target: dict[str, str], source: dict[str, str]) -> None:
+    for k, v in source.items():
+        k_lower = k.lower()
+        matching_keys = [exist_k for exist_k in target.keys() if exist_k.lower() == k_lower]
+        for mk in matching_keys:
+            del target[mk]
+        target[k] = v
+
+
 class openAIModelServerClientSession(ModelServerClientSession):
     client: openAIModelServerClient
 
@@ -220,74 +230,71 @@ class openAIModelServerClientSession(ModelServerClientSession):
             # Extract input and output following GenAI semantic conventions
             try:
                 # Extract input based on request type
-                messages = getattr(data, "messages", None)
-                if messages is not None:
+                if hasattr(data, "messages") and data.messages:
                     # Serialize each message, preserving tool_calls when present.
-                    input_messages = [msg.to_dict() for msg in messages]
+                    input_messages = [msg.to_dict() for msg in data.messages]
                     otel_response_info["input_messages"] = json.dumps(input_messages)
 
                     # Record tool definitions so they appear in Jaeger alongside the request.
-                    tool_definitions = getattr(data, "tool_definitions", None)
-                    if tool_definitions:
-                        otel_response_info["tool_definitions"] = json.dumps(tool_definitions)
-                else:
-                    prompt = getattr(data, "prompt", None)
-                    if prompt is not None:
-                        # Text completion - store as prompt string (gen_ai.prompt)
-                        otel_response_info["input_prompt"] = prompt
+                    if hasattr(data, "tool_definitions") and data.tool_definitions:
+                        otel_response_info["tool_definitions"] = json.dumps(data.tool_definitions)
+                elif hasattr(data, "prompt"):
+                    # Text completion - store as prompt string (gen_ai.prompt)
+                    otel_response_info["input_prompt"] = data.prompt
 
                 # Extract output text (gen_ai.output.text)
-                if response and response.status == 200 and response_content:
-                    response_json = None
+                if self.client.api_config.streaming and response_content:
                     stripped_response = response_content.strip()
-
                     if stripped_response.startswith("data:"):
-                        sse_payloads = []
+                        output_parts = []
+                        reasoning_parts = []
+                        tool_call_parts = []
                         for line in stripped_response.splitlines():
                             line = line.strip()
                             if not line or not line.startswith("data:"):
                                 continue
-
                             payload = line[len("data:") :].strip()
                             if not payload or payload == "[DONE]":
                                 continue
-
                             try:
-                                sse_payloads.append(json.loads(payload))
+                                chunk = json.loads(payload)
                             except json.JSONDecodeError:
                                 continue
+                            choices = chunk.get("choices", [])
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {})
+                            if delta.get("content"):
+                                output_parts.append(delta["content"])
+                            if delta.get("reasoning_content"):
+                                reasoning_parts.append(delta["reasoning_content"])
+                            if delta.get("tool_calls"):
+                                tool_call_parts.append(delta)
 
-                        if sse_payloads:
-                            response_json = sse_payloads[-1]
-                            # Concatenate all content deltas for full output text
-                            full_text = "".join(
-                                p.get("choices", [{}])[0].get("delta", {}).get("content", "") for p in sse_payloads
-                            )
-                            if full_text:
-                                otel_response_info["output_text"] = full_text
-                            # Check last chunk for tool_calls
-                            last_delta = sse_payloads[-1].get("choices", [{}])[0].get("delta", {})
-                            if last_delta.get("tool_calls"):
-                                otel_response_info["output_message"] = json.dumps(last_delta)
-                    else:
-                        response_json = json.loads(response_content)
+                        if output_parts:
+                            otel_response_info["output_text"] = "".join(output_parts)
+                        if reasoning_parts:
+                            otel_response_info["reasoning_text"] = "".join(reasoning_parts)
+                        if tool_call_parts:
+                            otel_response_info["output_message"] = json.dumps(tool_call_parts)
+                elif response and response.status == 200 and response_content:
+                    response_json = json.loads(response_content)
+                    choices = response_json.get("choices", [])
+                    if choices:
+                        if "message" in choices[0]:
+                            msg_out = choices[0].get("message", {})
+                            output_text = msg_out.get("content") or ""
+                            reasoning_content = msg_out.get("reasoning_content")
 
-                    if response_json and not stripped_response.startswith("data:"):
-                        choices = response_json.get("choices", [])
-                        if choices:
-                            choice = choices[0]
-                            if "message" in choice:
-                                # Chat completion response
-                                msg_out = choice.get("message", {})
-                                output_text = msg_out.get("content") or ""
-                                if msg_out.get("tool_calls"):
-                                    otel_response_info["output_message"] = json.dumps(msg_out)
-                                else:
-                                    otel_response_info["output_text"] = output_text
-                            elif "text" in choice:
-                                # Text completion response
-                                output_text = choice.get("text", "")
-                                otel_response_info["output_text"] = output_text
+                            otel_response_info["output_text"] = output_text
+                            if reasoning_content:
+                                otel_response_info["reasoning_text"] = reasoning_content
+
+                            if msg_out.get("tool_calls") or reasoning_content:
+                                otel_response_info["output_message"] = json.dumps(msg_out)
+                        elif "text" in choices[0]:
+                            output_text = choices[0].get("text", "")
+                            otel_response_info["output_text"] = output_text
             except Exception as e:
                 logger.warning(f"Failed to extract messages for OTEL: {e}")
 
@@ -324,7 +331,13 @@ class openAIModelServerClientSession(ModelServerClientSession):
             headers["Authorization"] = f"Bearer {self.client.api_key}"
 
         if self.client.api_config.headers:
-            headers.update(self.client.api_config.headers)
+            _update_headers_case_insensitive(headers, self.client.api_config.headers)
+
+        if data.headers:
+            _update_headers_case_insensitive(headers, data.headers)
+
+        if data.session_id and self.client.api_config.session_id_header_key:
+            headers[self.client.api_config.session_id_header_key] = data.session_id
 
         request_data = json.dumps(payload)
 
@@ -409,15 +422,25 @@ class openAIModelServerClientSession(ModelServerClientSession):
                         # aiohttp.ClientError handler.
                         if response is not None and response.status == 200 and not info:
                             caught_exception = read_error
+                            # If the stream broke partway, recover the bytes
+                            # received so the per-request report shows what the
+                            # server actually sent, and report the underlying
+                            # exception (e.g. ClientPayloadError) rather than the
+                            # StreamInterruptedError wrapper.
+                            original_error: Exception = read_error
+                            if isinstance(read_error, StreamInterruptedError):
+                                original_error = read_error.original
+                                if read_error.raw_content:
+                                    response_content = read_error.raw_content
                             error = ErrorResponseInfo(
-                                error_msg=str(read_error),
-                                error_type=type(read_error).__name__,
+                                error_msg=str(original_error),
+                                error_type=type(original_error).__name__,
                             )
                             info = await data.process_failure(
                                 response=None,
                                 config=self.client.api_config,
                                 tokenizer=self.client.tokenizer,
-                                exception=read_error,
+                                exception=original_error,
                                 lora_adapter=lora_adapter,
                             )
                         else:
@@ -461,12 +484,17 @@ class openAIModelServerClientSession(ModelServerClientSession):
                 lora_adapter=lora_adapter,
             )
 
+        if not info:
+            info = InferenceInfo(request_metrics=RequestMetrics(text=Text(input_tokens=0)))
+        if data.labels:
+            info.labels = data.labels
+
         metric = RequestLifecycleMetric(
             stage_id=stage_id,
             session_id=data.session_id if isinstance(data.session_id, str) else None,
             request_data=request_data,
             response_data=response_content,
-            info=info if info else InferenceInfo(request_metrics=RequestMetrics(text=Text(input_tokens=0))),
+            info=info,
             error=error,
             start_time=start,
             end_time=end_time,
@@ -487,19 +515,34 @@ class openAIModelServerClientSession(ModelServerClientSession):
             default_tpot_header = f"x-slo-tpot-{slo_unit}"
             ttft_header = getattr(self.client.api_config, "slo_ttft_header", None) or default_ttft_header
             tpot_header = getattr(self.client.api_config, "slo_tpot_header", None) or default_tpot_header
+
+            combined_headers = {}
             if self.client.api_config.headers:
-                ttft_threshold = self.client.api_config.headers.get(ttft_header)
-                tpot_threshold = self.client.api_config.headers.get(tpot_header)
+                for k, v in self.client.api_config.headers.items():
+                    combined_headers[k.lower()] = v
+            if data.headers:
+                for k, v in data.headers.items():
+                    combined_headers[k.lower()] = v
+
+            if combined_headers:
+                ttft_threshold = combined_headers.get(ttft_header.lower())
+                tpot_threshold = combined_headers.get(tpot_header.lower())
 
                 unit = slo_unit.lower()
                 unit_to_s = {"s": 1.0, "ms": 0.001, "us": 0.000001}
                 factor = unit_to_s.get(unit, 1.0)
 
-                if ttft_threshold is not None:
-                    metric.ttft_slo_sec = float(ttft_threshold) * factor
+                if ttft_threshold is not None and ttft_threshold != "default":
+                    try:
+                        metric.ttft_slo_sec = float(ttft_threshold) * factor
+                    except ValueError:
+                        logger.warning(f"Invalid TTFT SLO value: {ttft_threshold}")
 
-                if tpot_threshold is not None:
-                    metric.tpot_slo_sec = float(tpot_threshold) * factor
+                if tpot_threshold is not None and tpot_threshold != "default":
+                    try:
+                        metric.tpot_slo_sec = float(tpot_threshold) * factor
+                    except ValueError:
+                        logger.warning(f"Invalid TPOT SLO value: {tpot_threshold}")
 
         # Record the metric
         self.client.metrics_collector.record_metric(metric)

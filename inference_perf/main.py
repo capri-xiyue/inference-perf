@@ -42,7 +42,9 @@ from inference_perf.datagen import (
     InfinityInstructDataGenerator,
     BillsumConversationsDataGenerator,
     OTelTraceReplayDataGenerator,
+    WekaTraceReplayDataGenerator,
     ConversationReplayDataGenerator,
+    VisionArenaDataGenerator,
 )
 from inference_perf.client.modelserver import (
     ModelServerClient,
@@ -70,7 +72,7 @@ from inference_perf.circuit_breaker import init_circuit_breakers
 from inference_perf.reportgen import ReportGenerator
 from inference_perf.utils import CustomTokenizer, ReportFile, add_pydantic_args, unflatten_dict
 from inference_perf.utils.cli_summary import print_summary_table
-from inference_perf.logger import setup_logging
+from inference_perf.observability.logging import setup_logging
 import asyncio
 import time
 
@@ -271,7 +273,11 @@ def main_cli() -> None:
     # Create multiprocessing manager for session replay datagens if needed.
     # Must be created before workers are forked.
     mp_manager = None
-    if config.data and config.data.type in (DataGenType.OTelTraceReplay,) and config.load.num_workers > 0:
+    if (
+        config.data
+        and config.data.type in (DataGenType.OTelTraceReplay, DataGenType.WekaTraceReplay)
+        and config.load.num_workers > 0
+    ):
         mp_manager = mp.Manager()
 
     datagen: BaseGenerator
@@ -286,6 +292,7 @@ def main_cli() -> None:
                 DataGenType.InfinityInstruct,
                 DataGenType.BillsumConversations,
                 DataGenType.OTelTraceReplay,
+                DataGenType.WekaTraceReplay,
                 DataGenType.ConversationReplay,
             }
         ):
@@ -331,6 +338,9 @@ def main_cli() -> None:
         if config.data.type == DataGenType.ConversationReplay and config.data.conversation_replay is None:
             raise Exception(f"{config.data.type.value} data generator requires 'conversation_replay' to be configured")
 
+        if config.data.type == DataGenType.VisionArena and config.data.visionarena is None:
+            raise Exception(f"{config.data.type.value} data generator requires 'visionarena' to be configured")
+
         if config.data.type == DataGenType.ShareGPT:
             datagen = HFShareGPTDataGenerator(config.api, config.data, tokenizer)
         elif config.data.type == DataGenType.CNNDailyMail:
@@ -350,8 +360,14 @@ def main_cli() -> None:
             datagen = InfinityInstructDataGenerator(config.api, config.data, tokenizer)
         elif config.data.type == DataGenType.BillsumConversations:
             datagen = BillsumConversationsDataGenerator(config.api, config.data, tokenizer)
+        elif config.data.type == DataGenType.VisionArena:
+            datagen = VisionArenaDataGenerator(config.api, config.data, tokenizer)
         elif config.data.type == DataGenType.OTelTraceReplay:
             datagen = OTelTraceReplayDataGenerator(
+                config.api, config.data, tokenizer, mp_manager, config.load.base_seed, num_workers=config.load.num_workers
+            )
+        elif config.data.type == DataGenType.WekaTraceReplay:
+            datagen = WekaTraceReplayDataGenerator(
                 config.api, config.data, tokenizer, mp_manager, config.load.base_seed, num_workers=config.load.num_workers
             )
         else:
@@ -361,7 +377,7 @@ def main_cli() -> None:
 
     # Create session metrics collector only for session-replay workflows
     session_metrics_collector = None
-    if config.data and config.data.type in (DataGenType.OTelTraceReplay,):
+    if config.data and config.data.type in (DataGenType.OTelTraceReplay, DataGenType.WekaTraceReplay):
         session_metrics_collector = SessionMetricsCollector()
 
     # Define LoadGenerator with session metrics collector
