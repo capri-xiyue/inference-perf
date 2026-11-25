@@ -1,7 +1,7 @@
 # ActorTemplate (protojson-shaped substrate.ateapi.v1.ActorTemplate) for the
 # inference-perf tool executor. Each replayed session's actor is created from it.
 #
-#   kubectl ate create atespace inference-perf
+#   kubectl ate create atespace ip-bench
 #   kubectl ate create actor-template -f deploy/substrate/actor-template.yaml
 #
 # The container serves the agent-sandbox runtime API (POST /execute) on port 80,
@@ -9,7 +9,7 @@
 # requests. Pair it with a WorkerPool (apiVersion ate.dev/v1) whose labels match
 # workerSelector; see the Substrate docs for the pool spec of your install.
 metadata:
-  atespace: inference-perf
+  atespace: ip-bench
   name: python-runtime
 workerSelector:
   matchLabels:

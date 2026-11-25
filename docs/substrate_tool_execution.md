@@ -119,6 +119,9 @@ create, exec overhead, jitter). Use it to try the metrics without a cluster.
 
 ## Running against a real Substrate install
 
+Step-by-step manifests (worker pool, actor template, access policy, an optional
+vLLM backend and the benchmark Job) are in [deploy/substrate](../deploy/substrate/README.md).
+
 The backend talks to ateapi over gRPC (`substrate.ateapi.v1.Control`) and to
 actors through `atenet-router`, so inference-perf runs as a Pod in the cluster:
 

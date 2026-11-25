@@ -1,0 +1,34 @@
+# WorkerPool for the inference-perf tool-executor actors (gVisor), plus the
+# client namespace. Apply after `ate-setup deploy ate-system`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ip-bench
+  labels:
+    # ate-system's NetworkPolicies admit ateapi clients only from labeled namespaces.
+    ate.dev/api-access: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: inference-perf
+  namespace: ip-bench
+---
+apiVersion: ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: ip-tools
+  namespace: ip-bench
+  labels:
+    workload: inference-perf-tools
+spec:
+  replicas: 10
+  workerImage: ghcr.io/agent-substrate/substrate/ateworker-gvisor:v1.0.0
+  sandboxClasses:
+  - name: gvisor
+  template:
+    nodeSelector:
+      cloud.google.com/gke-nodepool: substrate-node-pool
+    resources:
+      limits: {cpu: "1", memory: 1536Mi}
+      requests: {cpu: 10m, memory: 880Mi}

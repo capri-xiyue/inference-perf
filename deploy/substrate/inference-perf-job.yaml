@@ -1,0 +1,123 @@
+# inference-perf run against real GKE Agent Substrate. Modeled on the repo's
+# helm chart (deploy/inference-perf): config.yml from a ConfigMap, command
+# `inference-perf --config_file ...`. Adds the Substrate client identity: a pod
+# certificate (mTLS to ateapi and atenet-router) and the servicedns CA.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-perf-config
+  namespace: ip-bench
+data:
+  config.yml: |
+    load:
+      type: trace_session_replay
+      stages:
+        - concurrent_sessions: 4
+          num_sessions: 10
+      num_workers: 2
+      worker_max_concurrency: 100
+      request_timeout: 600
+      stage_teardown_grace_seconds: 60
+    api:
+      type: chat
+      streaming: true
+    server:
+      type: vllm
+      model_name: Qwen/Qwen3-0.6B
+      base_url: http://vllm.llm.svc.cluster.local:8000
+      ignore_eos: true
+    tokenizer:
+      pretrained_model_name_or_path: Qwen/Qwen3-0.6B
+    data:
+      type: tracelab_trace_replay
+      tracelab_trace_replay:
+        trace_files: ["/data/tracelab_small.jsonl"]
+        use_static_model: true
+        static_model_name: Qwen/Qwen3-0.6B
+        trace_idle_gap_cap_seconds: 20
+        tool_executor:
+          type: substrate
+          idle_gap_threshold_ms: 5000
+          resume_mode: explicit
+          suspend_on_idle: true
+          suspend_mode: async
+          tool_command_template: "sleep {duration_sec:.3f}"
+          substrate:
+            atespace: ip-bench
+            actor_template: python-runtime
+            actor_name_prefix: ip
+            api_endpoint: api.ate-system.svc:443
+            api_server_name: api.ate-system.svc
+            api_ca_path: /run/ate/ca.crt
+            api_cert_bundle_path: /run/ate/credential-bundle.pem
+            router_url: https://atenet-router.ate-system.svc
+            router_ca_path: /run/ate/ca.crt
+            router_cert_bundle_path: /run/ate/credential-bundle.pem
+    report:
+      request_lifecycle:
+        summary: true
+        per_stage: true
+        per_request: true
+        per_request_fields:
+          request: false
+          response: false
+          response_chunks: false
+          info: true
+          computed_metrics: true
+      session_lifecycle:
+        summary: true
+        per_stage: false
+        per_session: true
+    storage:
+      local_storage:
+        path: /reports/run
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-perf
+  namespace: ip-bench
+  labels: {app: inference-perf}
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: {app: inference-perf}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: inference-perf
+      nodeSelector:
+        cloud.google.com/gke-nodepool: bench
+      containers:
+      - name: inference-perf-container
+        image: IMAGE
+        command: ["sh", "-c"]
+        # Keep the pod around after the run so the reports can be copied out.
+        args:
+        - inference-perf --config_file /etc/inference-perf/config.yml --log-level INFO; echo "EXIT=$?"; sleep 14400
+        resources:
+          requests: {cpu: "4", memory: 8Gi}
+        volumeMounts:
+        - {name: config, mountPath: /etc/inference-perf, readOnly: true}
+        - {name: trace, mountPath: /data, readOnly: true}
+        - {name: ate-client, mountPath: /run/ate, readOnly: true}
+        - {name: reports, mountPath: /reports}
+      volumes:
+      - name: config
+        configMap: {name: inference-perf-config}
+      - name: trace
+        configMap: {name: tracelab-trace}
+      - name: reports
+        emptyDir: {}
+      - name: ate-client
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels: {podcert.ate.dev/canarying: live}
+              path: ca.crt

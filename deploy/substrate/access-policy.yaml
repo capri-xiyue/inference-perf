@@ -1,0 +1,6 @@
+metadata:
+  name: default
+bindings:
+- role: editor
+  members:
+  - user:spiffe://cluster.local/ns/ip-bench/sa/inference-perf
