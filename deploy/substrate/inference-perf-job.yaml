@@ -38,22 +38,26 @@ data:
         tool_executor:
           type: substrate
           idle_gap_threshold_ms: 5000
-          suspend_actor:
-            between_turns: true
-            after_each_tool_call: false
-          snapshot_durability: async
-          tool_command_template: "sleep {duration_sec:.3f}"
-          substrate:
+          actor:
             atespace: ip-bench
-            actor_template: python-runtime
-            actor_name_prefix: ip
-            api_endpoint: api.ate-system.svc:443
-            api_server_name: api.ate-system.svc
-            api_ca_path: /run/ate/ca.crt
-            api_cert_bundle_path: /run/ate/credential-bundle.pem
-            router_url: https://atenet-router.ate-system.svc
-            router_ca_path: /run/ate/ca.crt
-            router_cert_bundle_path: /run/ate/credential-bundle.pem
+            template: python-runtime
+            name_prefix: ip
+            suspend:
+              between_turns: true
+              after_each_tool_call: false
+              snapshot_durability: async
+            tool_call:
+              command_template: "sleep {duration_sec:.3f}"
+          substrate:
+            api:
+              endpoint: api.ate-system.svc:443
+              server_name: api.ate-system.svc
+              ca_path: /run/ate/ca.crt
+              cert_bundle_path: /run/ate/credential-bundle.pem
+            router:
+              url: https://atenet-router.ate-system.svc
+              ca_path: /run/ate/ca.crt
+              cert_bundle_path: /run/ate/credential-bundle.pem
     report:
       request_lifecycle:
         summary: true

@@ -28,27 +28,31 @@ data:
     tool_executor:
       type: substrate
       idle_gap_threshold_ms: 5000
-      # Main agent and most subagents share the session's actor; code-search
-      # subagents get a sandbox of their own.
-      actor_assignment:
-        default: session
-        rules:
-          - match: {gen_ai.agent.name: "Explore"}
-            actor: dedicated
-      suspend_actor:
-        between_turns: true
-        after_each_tool_call: false
-      snapshot_durability: async
-      tool_command_template: "sleep {duration_sec:.3f}"
-      substrate:
+      actor:
         atespace: inference-perf
-        actor_template: python-runtime
-        api_endpoint: api.ate-system.svc:443
-        api_ca_path: /run/servicedns-ca/ca.crt
-        api_token_path: /run/ate-token/token
-        router_url: https://atenet-router.ate-system.svc
-        router_ca_path: /run/router-ca/ca.crt
-        router_cert_bundle_path: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+        template: python-runtime
+        # Main agent and most subagents share the session's actor; code-search
+        # subagents get a sandbox of their own.
+        assignment:
+          default: session
+          rules:
+            - match: {gen_ai.agent.name: "Explore"}
+              assign: dedicated
+        suspend:
+          between_turns: true
+          after_each_tool_call: false
+          snapshot_durability: async
+        tool_call:
+          command_template: "sleep {duration_sec:.3f}"
+      substrate:
+        api:
+          endpoint: api.ate-system.svc:443
+          ca_path: /run/servicedns-ca/ca.crt
+          token_path: /run/ate-token/token
+        router:
+          url: https://atenet-router.ate-system.svc
+          ca_path: /run/router-ca/ca.crt
+          cert_bundle_path: /run/podidentity.podcert.ate.dev/credential-bundle.pem
 report:
   request_lifecycle:
     summary: true

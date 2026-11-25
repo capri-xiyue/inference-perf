@@ -26,25 +26,26 @@ Each event's gap is classified before the event is dispatched, from the best evi
 
 | Gap | What the executor does |
 |---|---|
-| `idle` | Suspend the actor (`suspend_actor.between_turns`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
-| `tool` | Wake the actor if needed, then run `tool_command_template` in it (default `sleep {duration_sec}`, so the in-actor time matches the trace). The recorded tool names are reported in `agent_gap.tool_names`. |
+| `idle` | Suspend the actor (`actor.suspend.between_turns`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
+| `tool` | Wake the actor if needed, then run `actor.tool_call.command_template` in it (default `sleep {duration_sec}`, so the in-actor time matches the trace). The recorded tool names are reported in `agent_gap.tool_names`. |
 | `none` | Nothing. |
 
 Actors:
 
-- By default every call — main agent and subagents alike — runs its gaps on the session's shared actor, as Claude Code subagents share their parent's machine. `actor_assignment.rules` give selected agents a **dedicated** actor: one per agent instance (`gen_ai.agent.id`, else `gen_ai.agent.name`), shared by that agent's parallel streams. Rules match the call's attributes with glob patterns; the first match wins, and `default` (`session`) applies otherwise. A dedicated rule on a call with no agent attributes falls back to the session actor.
+- By default every call — main agent and subagents alike — runs its gaps on the session's shared actor, as Claude Code subagents share their parent's machine. `actor.assignment.rules` give selected agents a **dedicated** actor: one per agent instance (`gen_ai.agent.id`, else `gen_ai.agent.name`), shared by that agent's parallel streams. Rules match the call's attributes with glob patterns; the first match wins, and `default` (`session`) applies otherwise. A dedicated rule on a call with no agent attributes falls back to the session actor.
 
   Agent identity comes from the OTel GenAI attributes `gen_ai.agent.name` / `gen_ai.agent.id`. OTel traces carry them on their spans (any other span attribute can be matched too); Weka replay sets them on subagent calls (`name` = `subagent_type`, `id` = `agent_id`). Main-agent calls in Weka carry neither, so they follow `default`.
 
   ```yaml
-  actor_assignment:
-    rules:                                           # everything else shares the session actor
-      - match: {gen_ai.agent.name: "Explore"}        # code-search subagents get their own sandbox
-        actor: dedicated
+  actor:
+    assignment:
+      rules:                                         # everything else shares the session actor
+        - match: {gen_ai.agent.name: "Explore"}      # code-search subagents get their own sandbox
+          assign: dedicated
   ```
 
 - Actors never talk to each other — inference-perf passes outputs between them, as it already does between graph events.
-- Actors are deleted when their session drains, and any left at the end of a stage are deleted at teardown.
+- Actors are deleted when their session drains (`actor.delete_on_session_end`), and any left at the end of a stage are deleted at teardown.
 
 Waking:
 
@@ -52,9 +53,9 @@ Suspend and wake (the two suspend points are independent). A suspended actor is 
 
 | Setting | Values | Meaning |
 |---|---|---|
-| `suspend_actor.between_turns` | `true` (default) / `false` | Suspend during user idle time between turns; the next turn wakes the actor |
-| `suspend_actor.after_each_tool_call` | `false` (default) / `true` | Suspend after every tool call, off the request path while the next LLM call runs; the next tool call wakes the actor |
-| `snapshot_durability` | `async` (default) / `sync` | `SuspendActor` returns once the snapshot is on the node, or only after it reaches durable storage (Substrate `DurabilityMode`) |
+| `actor.suspend.between_turns` | `true` (default) / `false` | Suspend during user idle time between turns; the next turn wakes the actor |
+| `actor.suspend.after_each_tool_call` | `false` (default) / `true` | Suspend after every tool call, off the request path while the next LLM call runs; the next tool call wakes the actor |
+| `actor.suspend.snapshot_durability` | `async` (default) / `sync` | `SuspendActor` returns once the snapshot is on the node, or only after it reaches durable storage (Substrate `DurabilityMode`) |
 
 ## Metrics
 
@@ -84,7 +85,7 @@ into `cold` (first turn: restore from the template's golden snapshot) and
 | `first_call_ttft_sec` | TTFT of the turn's first call alone |
 | `alpha_inf` | Σ LLM call latency / Lturn (serial sum; can exceed 1 with parallel subagents) |
 | `tool_exec_sec` | Ltool_exec per tool call (round trip through the router, incl. in-actor time) |
-| `tool_wake_sec` | Wakes paid by tool calls (with `suspend_actor.after_each_tool_call`) |
+| `tool_wake_sec` | Wakes paid by tool calls (with `actor.suspend.after_each_tool_call`) |
 
 Omitting `tool_executor` leaves every report byte-identical to a run without it.
 
@@ -98,25 +99,33 @@ data:
     tool_executor:
       type: substrate            # or fake_substrate (no cluster)
       idle_gap_threshold_ms: 5000
-      actor_assignment:
-        default: session
-        rules:
-          - match: {gen_ai.agent.name: "Explore"}
-            actor: dedicated
-      suspend_actor:
-        between_turns: true
-        after_each_tool_call: false
-      snapshot_durability: async
-      tool_command_template: "sleep {duration_sec:.3f}"
-      substrate:
+      actor:                     # everything about the actors
         atespace: inference-perf
-        actor_template: python-runtime
-        api_endpoint: api.ate-system.svc:443
-        api_ca_path: /run/servicedns-ca/ca.crt
-        api_token_path: /run/ate-token/token
-        router_url: https://atenet-router.ate-system.svc
-        router_ca_path: /run/router-ca/ca.crt
-        router_cert_bundle_path: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+        template: python-runtime
+        name_prefix: ip
+        assignment:              # which actor runs each gap
+          default: session
+          rules:
+            - match: {gen_ai.agent.name: "Explore"}
+              assign: dedicated
+        suspend:                 # when and how actors are suspended
+          between_turns: true
+          after_each_tool_call: false
+          snapshot_durability: async
+        tool_call:               # what runs in the actor for a tool gap
+          command_template: "sleep {duration_sec:.3f}"
+          timeout_sec: 300
+          execute_path: /execute
+        delete_on_session_end: true
+      substrate:                 # connection only
+        api:
+          endpoint: api.ate-system.svc:443
+          ca_path: /run/servicedns-ca/ca.crt
+          token_path: /run/ate-token/token
+        router:
+          url: https://atenet-router.ate-system.svc
+          ca_path: /run/router-ca/ca.crt
+          cert_bundle_path: /run/podidentity.podcert.ate.dev/credential-bundle.pem
 ```
 
 `type: fake_substrate` runs the same lifecycle against an in-process stand-in
@@ -132,8 +141,8 @@ The backend talks to ateapi over gRPC (`substrate.ateapi.v1.Control`) and to
 actors through `atenet-router`, so inference-perf runs as a Pod in the cluster:
 
 1. Label the benchmark namespace `ate.dev/api-access=true` (ate-system's NetworkPolicies admit API clients only from labeled namespaces).
-2. Authenticate to ateapi with a projected ServiceAccount token (audience `api.ate-system.svc`, `api_token_path`) or a pod certificate (`api_cert_bundle_path`); verify it with the `servicedns.podcert.ate.dev/identity` ClusterTrustBundle (`api_ca_path`).
-3. `atenet-router` accepts mTLS only: project a pod certificate (`router_cert_bundle_path`) and add the Pod's SPIFFE ID to the router's `--ingress-allowed-spiffe-ids`.
+2. Authenticate to ateapi with a projected ServiceAccount token (audience `api.ate-system.svc`, `substrate.api.token_path`) or a pod certificate (`substrate.api.cert_bundle_path`); verify it with the `servicedns.podcert.ate.dev/identity` ClusterTrustBundle (`substrate.api.ca_path`).
+3. `atenet-router` accepts mTLS only: project a pod certificate (`substrate.router.cert_bundle_path`) and add the Pod's SPIFFE ID to the router's `--ingress-allowed-spiffe-ids`.
 4. Create an ActorTemplate whose container serves the agent-sandbox runtime API (`POST /execute {"command": ...}` → `{stdout, stderr, exit_code}`) on the actor's **default ingress port (80)**, plus a WorkerPool sized for the concurrency you replay.
 
 ## PoC limitations

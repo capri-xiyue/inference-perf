@@ -68,7 +68,7 @@ class ActorAssignmentRule(StrictBaseModel):
             "matches. E.g. {'gen_ai.agent.name': 'Explore'}."
         ),
     )
-    actor: ActorAssignment = Field(..., description="Where gaps of matching calls run.")
+    assign: ActorAssignment = Field(..., description="Where gaps of matching calls run.")
 
 
 class ActorAssignmentConfig(StrictBaseModel):
@@ -82,7 +82,7 @@ class ActorAssignmentConfig(StrictBaseModel):
             if all(
                 key in attributes and fnmatch.fnmatchcase(str(attributes[key]), pattern) for key, pattern in rule.match.items()
             ):
-                return rule.actor
+                return rule.assign
         return self.default
 
 
@@ -93,8 +93,8 @@ class SnapshotDurability(str, Enum):
     SYNC = "sync"
 
 
-class SuspendActorConfig(StrictBaseModel):
-    """When the actor is suspended. The two moments are independent."""
+class ActorSuspendConfig(StrictBaseModel):
+    """When the actor is suspended and how. The two moments are independent."""
 
     between_turns: bool = Field(
         True, description="Suspend during user idle time between turns; the next turn wakes the actor."
@@ -103,6 +103,52 @@ class SuspendActorConfig(StrictBaseModel):
         False,
         description="Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor.",
     )
+    snapshot_durability: SnapshotDurability = Field(
+        SnapshotDurability.ASYNC, description="When SuspendActor returns relative to its snapshot reaching durable storage."
+    )
+
+
+class ActorToolCallConfig(StrictBaseModel):
+    """What runs in the actor for a tool gap."""
+
+    command_template: str = Field(
+        "sleep {duration_sec:.3f}",
+        description="Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length.",
+    )
+    timeout_sec: float = Field(300.0, gt=0, description="Timeout for one tool execution.")
+    execute_path: str = Field(
+        "/execute", description="Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API)."
+    )
+
+    @model_validator(mode="after")
+    def validate_command_template(self) -> "ActorToolCallConfig":
+        try:
+            self.command_template.format(duration_sec=0.0)
+        except (KeyError, IndexError, ValueError) as e:
+            raise ValueError(f"invalid command_template: {e}") from e
+        return self
+
+
+class ActorConfig(StrictBaseModel):
+    """Everything about the actors that run tool gaps: what they are, who uses which, and their lifecycle."""
+
+    atespace: Optional[str] = Field(None, description="Atespace that holds the actors (required for type=substrate).")
+    template: Optional[str] = Field(
+        None, description="ActorTemplate (in the same atespace) every actor is created from (required for type=substrate)."
+    )
+    name_prefix: str = Field("ip", description="Prefix for generated actor names.")
+    assignment: ActorAssignmentConfig = Field(
+        default_factory=ActorAssignmentConfig,
+        description=(
+            "Which actor runs each gap. By default every call, subagents included, uses the session's shared "
+            "actor; rules give selected agents a dedicated actor."
+        ),
+    )
+    suspend: ActorSuspendConfig = Field(default_factory=ActorSuspendConfig, description="When and how actors are suspended.")
+    tool_call: ActorToolCallConfig = Field(
+        default_factory=ActorToolCallConfig, description="What runs in the actor for a tool gap."
+    )
+    delete_on_session_end: bool = Field(True, description="Delete a session's actors once it drains.")
 
 
 class FakeSubstrateConfig(StrictBaseModel):
@@ -119,33 +165,37 @@ class FakeSubstrateConfig(StrictBaseModel):
     jitter_fraction: float = Field(0.2, ge=0, le=1, description="Uniform +/- jitter applied to every simulated latency.")
 
 
+class SubstrateApiConfig(StrictBaseModel):
+    """ateapi gRPC control plane."""
+
+    endpoint: str = Field("api.ate-system.svc:443", description="ateapi gRPC endpoint (host:port).")
+    server_name: str = Field("api.ate-system.svc", description="TLS server name ateapi presents.")
+    ca_path: Optional[str] = Field(
+        None, description="CA bundle that verifies ateapi (servicedns.podcert.ate.dev/identity ClusterTrustBundle)."
+    )
+    token_path: Optional[str] = Field(
+        None, description="File holding a bearer JWT for ateapi, e.g. a projected SA token with audience api.ate-system.svc."
+    )
+    cert_bundle_path: Optional[str] = Field(
+        None, description="Pod certificate credential bundle (key + chain PEM) for mTLS to ateapi."
+    )
+
+
+class SubstrateRouterConfig(StrictBaseModel):
+    """atenet-router data plane (traffic to actors)."""
+
+    url: str = Field("https://atenet-router.ate-system.svc", description="atenet-router base URL.")
+    ca_path: Optional[str] = Field(None, description="CA bundle that verifies atenet-router.")
+    cert_bundle_path: Optional[str] = Field(
+        None, description="Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router."
+    )
+
+
 class SubstrateConfig(StrictBaseModel):
     """Connection settings for a GKE Agent Substrate installation."""
 
-    atespace: str = Field(..., description="Atespace that holds the actors.")
-    actor_template: str = Field(..., description="ActorTemplate (in the same atespace) every actor is created from.")
-    actor_name_prefix: str = Field("ip", description="Prefix for generated actor names.")
-    api_endpoint: str = Field("api.ate-system.svc:443", description="ateapi gRPC endpoint (host:port).")
-    api_server_name: str = Field("api.ate-system.svc", description="TLS server name ateapi presents.")
-    api_ca_path: Optional[str] = Field(
-        None, description="CA bundle that verifies ateapi (servicedns.podcert.ate.dev/identity ClusterTrustBundle)."
-    )
-    api_token_path: Optional[str] = Field(
-        None, description="File holding a bearer JWT for ateapi, e.g. a projected SA token with audience api.ate-system.svc."
-    )
-    api_cert_bundle_path: Optional[str] = Field(
-        None, description="Pod certificate credential bundle (key + chain PEM) for mTLS to ateapi."
-    )
-    router_url: str = Field(
-        "https://atenet-router.ate-system.svc", description="atenet-router base URL for actor data-plane traffic."
-    )
-    router_ca_path: Optional[str] = Field(None, description="CA bundle that verifies atenet-router.")
-    router_cert_bundle_path: Optional[str] = Field(
-        None, description="Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router."
-    )
-    execute_path: str = Field(
-        "/execute", description="Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API)."
-    )
+    api: SubstrateApiConfig = Field(default_factory=SubstrateApiConfig, description="Control plane connection.")
+    router: SubstrateRouterConfig = Field(default_factory=SubstrateRouterConfig, description="Data plane connection.")
     request_timeout_sec: float = Field(120.0, gt=0, description="Timeout for a single control or data plane call.")
 
 
@@ -157,38 +207,18 @@ class ToolExecutorConfig(StrictBaseModel):
         5000,
         ge=0,
         description=(
-            "A gap at least this long, with no role:tool message to classify it, is treated as user idle time: the "
-            "actor is suspended during the gap and woken at its end (a new turn). Shorter non-zero gaps are tool calls."
+            "A gap at least this long, with no recorded gap kind or role:tool message to classify it, is treated as "
+            "user idle time (a new turn). Shorter non-zero gaps are tool calls."
         ),
     )
-    actor_assignment: ActorAssignmentConfig = Field(
-        default_factory=ActorAssignmentConfig,
-        description=(
-            "Which actor runs each gap. By default every call, subagents included, uses the session's shared "
-            "actor; rules give selected agents a dedicated actor."
-        ),
+    actor: ActorConfig = Field(default_factory=ActorConfig, description="Actor identity, assignment and lifecycle.")
+    substrate: SubstrateConfig = Field(
+        default_factory=SubstrateConfig, description="Substrate connection settings (type=substrate)."
     )
-    suspend_actor: SuspendActorConfig = Field(
-        default_factory=SuspendActorConfig, description="When the actor is suspended: between turns, after each tool call."
-    )
-    snapshot_durability: SnapshotDurability = Field(
-        SnapshotDurability.ASYNC, description="When SuspendActor returns relative to its snapshot reaching durable storage."
-    )
-    tool_command_template: str = Field(
-        "sleep {duration_sec:.3f}",
-        description="Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length.",
-    )
-    tool_timeout_sec: float = Field(300.0, gt=0, description="Timeout for one tool execution.")
-    delete_actors_on_session_end: bool = Field(True, description="Delete a session's actors once it drains.")
     fake: FakeSubstrateConfig = Field(default_factory=FakeSubstrateConfig, description="Fake backend latency model.")
-    substrate: Optional[SubstrateConfig] = Field(None, description="Substrate connection settings (type=substrate).")
 
     @model_validator(mode="after")
     def validate_backend(self) -> "ToolExecutorConfig":
-        if self.type == ToolExecutorType.SUBSTRATE and self.substrate is None:
-            raise ValueError("tool_executor.substrate is required when tool_executor.type is 'substrate'")
-        try:
-            self.tool_command_template.format(duration_sec=0.0)
-        except (KeyError, IndexError, ValueError) as e:
-            raise ValueError(f"invalid tool_command_template: {e}") from e
+        if self.type == ToolExecutorType.SUBSTRATE and (not self.actor.atespace or not self.actor.template):
+            raise ValueError("tool_executor.actor.atespace and tool_executor.actor.template are required for type 'substrate'")
         return self

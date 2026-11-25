@@ -22,17 +22,9 @@ def build_tool_executor(config: ToolExecutorConfig, seed: Optional[int] = None) 
     if config.type == ToolExecutorType.FAKE_SUBSTRATE:
         from inference_perf.toolexec.fake_backend import FakeSubstrateBackend
 
-        return SubstrateToolExecutor(
-            config, FakeSubstrateBackend(config.fake, seed=seed), name="fake_substrate", actor_name_prefix="fake"
-        )
+        return SubstrateToolExecutor(config, FakeSubstrateBackend(config.fake, seed=seed), name="fake_substrate")
     if config.type == ToolExecutorType.SUBSTRATE:
         from inference_perf.toolexec.ate_backend import AteSubstrateBackend
 
-        assert config.substrate is not None  # enforced by ToolExecutorConfig
-        return SubstrateToolExecutor(
-            config,
-            AteSubstrateBackend(config.substrate),
-            name="substrate",
-            actor_name_prefix=config.substrate.actor_name_prefix,
-        )
+        return SubstrateToolExecutor(config, AteSubstrateBackend(config.substrate, config.actor), name="substrate")
     raise ValueError(f"Unsupported tool executor type: {config.type}")

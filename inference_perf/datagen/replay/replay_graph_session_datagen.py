@@ -736,7 +736,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
         executor_config = self.generator.get_tool_executor_config()
         assert executor is not None and executor_config is not None
         attributes = self.call_attributes or {}
-        actor_key = resolve_actor_key(executor_config.actor_assignment, session_id, attributes)
+        actor_key = resolve_actor_key(executor_config.actor.assignment, session_id, attributes)
         last_role = self.original_messages[-1].get("role") if self.original_messages else None
         recorded_kind = attributes.get(GAP_KIND_ATTRIBUTE)
         tool_names = attributes.get(TOOL_NAME_ATTRIBUTE)

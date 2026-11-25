@@ -84,12 +84,12 @@ def _now() -> float:
 
 
 class SubstrateToolExecutor(ToolExecutor):
-    def __init__(self, config: ToolExecutorConfig, backend: SubstrateBackend, name: str, actor_name_prefix: str) -> None:
+    def __init__(self, config: ToolExecutorConfig, backend: SubstrateBackend, name: str) -> None:
         super().__init__()
         self.config = config
         self.backend = backend
         self.name = name
-        self._prefix = _NAME_UNSAFE.sub("-", actor_name_prefix.lower()).strip("-") or "ip"
+        self._prefix = _NAME_UNSAFE.sub("-", config.actor.name_prefix.lower()).strip("-") or "ip"
         # Actor names must not collide across worker processes or runs.
         self._run_id = uuid.uuid4().hex[:6]
         self._actors: Dict[str, _ActorState] = {}
@@ -121,7 +121,7 @@ class SubstrateToolExecutor(ToolExecutor):
                 return None
             t0 = _now()
             await self.backend.suspend_actor(
-                actor.name, synchronous=self.config.snapshot_durability == SnapshotDurability.SYNC
+                actor.name, synchronous=self.config.actor.suspend.snapshot_durability == SnapshotDurability.SYNC
             )
             actor.suspended = True
             return _now() - t0
@@ -181,7 +181,7 @@ class SubstrateToolExecutor(ToolExecutor):
 
     async def _run_idle_gap(self, ctx: GapContext, metrics: AgentGapMetrics) -> None:
         actor = await self._get_actor(ctx, metrics)
-        if self.config.suspend_actor.between_turns:
+        if self.config.actor.suspend.between_turns:
             await self._await_pending_suspend(actor)
             metrics.suspend_sec = await self._suspend(actor)
         # The user is idle for the rest of the recorded gap; suspend time counts toward it.
@@ -197,11 +197,11 @@ class SubstrateToolExecutor(ToolExecutor):
             # Already running: no wake happened for this tool call.
             metrics.wake_start = None
             metrics.wake_sec = None
-        command = self.config.tool_command_template.format(duration_sec=ctx.wait_sec)
+        command = self.config.actor.tool_call.command_template.format(duration_sec=ctx.wait_sec)
         actor.inflight_tools += 1
         try:
             t0 = _now()
-            result = await self.backend.execute(actor.name, command, self.config.tool_timeout_sec)
+            result = await self.backend.execute(actor.name, command, self.config.actor.tool_call.timeout_sec)
             metrics.tool_exec_sec = _now() - t0
         finally:
             actor.inflight_tools -= 1
@@ -209,7 +209,7 @@ class SubstrateToolExecutor(ToolExecutor):
         if result.exit_code != 0:
             logger.debug("Tool in actor %s exited %d (event %s)", actor.name, result.exit_code, ctx.event_id)
 
-        if self.config.suspend_actor.after_each_tool_call and actor.pending_suspend is None:
+        if self.config.actor.suspend.after_each_tool_call and actor.pending_suspend is None:
             # Suspend while the next LLM call runs, off the request's critical path.
             actor.pending_suspend = asyncio.get_running_loop().create_task(self._suspend(actor))
 
@@ -225,7 +225,7 @@ class SubstrateToolExecutor(ToolExecutor):
             logger.warning("Failed to delete actor %s: %s", actor.name, e)
 
     async def end_session(self, session_id: str) -> None:
-        if not self.config.delete_actors_on_session_end:
+        if not self.config.actor.delete_on_session_end:
             return
         keys = [k for k, a in self._actors.items() if a.session_id == session_id]
         actors: List[_ActorState] = [self._actors.pop(k) for k in keys]
@@ -235,6 +235,6 @@ class SubstrateToolExecutor(ToolExecutor):
         await self.drain_background()
         actors = list(self._actors.values())
         self._actors.clear()
-        if self.config.delete_actors_on_session_end:
+        if self.config.actor.delete_on_session_end:
             await asyncio.gather(*(self._delete(a) for a in actors))
         await self.backend.aclose()

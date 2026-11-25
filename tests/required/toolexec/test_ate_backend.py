@@ -22,7 +22,7 @@ import pytest
 from aiohttp import web
 from google.protobuf.message import Message
 
-from inference_perf.config.datagen.toolexec import SubstrateConfig
+from inference_perf.config.datagen.toolexec import ActorConfig, SubstrateConfig
 from inference_perf.toolexec.ate_backend import AteSubstrateBackend, build_ateapi_messages, split_credential_bundle
 
 
@@ -123,12 +123,10 @@ async def test_backend_calls_control_plane_and_router(tmp_path: Path) -> None:
     token = tmp_path / "token"
     token.write_text("jwt-123\n")
     backend = AteSubstrateBackend(
-        SubstrateConfig(
-            atespace="bench",
-            actor_template="python-runtime",
-            api_token_path=str(token),
-            router_url=f"http://127.0.0.1:{http_port}",
-        )
+        SubstrateConfig.model_validate(
+            {"api": {"token_path": str(token)}, "router": {"url": f"http://127.0.0.1:{http_port}"}}
+        ),
+        ActorConfig(atespace="bench", template="python-runtime"),
     )
     # The real backend dials TLS; point it at the plaintext fakes instead.
     backend._channel = grpc.aio.insecure_channel(f"127.0.0.1:{grpc_port}")

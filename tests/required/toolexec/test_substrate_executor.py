@@ -124,7 +124,7 @@ class TestActorAssignment:
 
     def test_only_named_agents_get_a_dedicated_actor(self) -> None:
         a = ActorAssignmentConfig(
-            rules=[ActorAssignmentRule(match={"gen_ai.agent.name": "Expl*"}, actor=ActorAssignment.DEDICATED)]
+            rules=[ActorAssignmentRule(match={"gen_ai.agent.name": "Expl*"}, assign=ActorAssignment.DEDICATED)]
         )
         assert resolve_actor_key(a, "s", self.EXPLORE) == "s::agent:a1"  # glob match
         assert resolve_actor_key(a, "s", self.EXPLORE_2) == "s::agent:a3"  # one actor per agent instance
@@ -134,8 +134,8 @@ class TestActorAssignment:
     def test_first_matching_rule_wins_and_all_keys_must_match(self) -> None:
         a = ActorAssignmentConfig(
             rules=[
-                ActorAssignmentRule(match={"gen_ai.agent.name": "Explore", "tier": "cpu"}, actor=ActorAssignment.SESSION),
-                ActorAssignmentRule(match={"gen_ai.agent.name": "*"}, actor=ActorAssignment.DEDICATED),
+                ActorAssignmentRule(match={"gen_ai.agent.name": "Explore", "tier": "cpu"}, assign=ActorAssignment.SESSION),
+                ActorAssignmentRule(match={"gen_ai.agent.name": "*"}, assign=ActorAssignment.DEDICATED),
             ]
         )
         assert resolve_actor_key(a, "s", self.EXPLORE) == "s::agent:a1"
@@ -148,7 +148,7 @@ class TestActorAssignment:
 
     def test_rule_needs_a_match(self) -> None:
         with pytest.raises(ValueError):
-            ActorAssignmentRule(match={}, actor=ActorAssignment.DEDICATED)
+            ActorAssignmentRule(match={}, assign=ActorAssignment.DEDICATED)
 
 
 class TestSubstrateExecutor:
@@ -156,7 +156,7 @@ class TestSubstrateExecutor:
         executor, backend = _executor()
         m = await executor.run_gap(_ctx(GapKind.IDLE))
         assert _ops(backend) == ["create", "resume"]
-        assert m.actor is not None and m.actor.startswith("fake-")
+        assert m.actor is not None and m.actor.startswith("ip-")
         assert m.cold is True and m.resumed is True
         assert m.wake_sec is not None and m.wake_sec >= COLD_MS / 1000 * 0.9
         # Freshly created actors are already suspended: nothing to suspend.
@@ -184,14 +184,14 @@ class TestSubstrateExecutor:
         assert m.wake_start is not None and m.wake_start - m.gap_start >= 0.1 * 0.95
 
     async def test_no_suspend_between_turns_keeps_actor_running(self) -> None:
-        executor, backend = _executor(suspend_actor={"between_turns": False})
+        executor, backend = _executor(actor={"suspend": {"between_turns": False}})
         await executor.run_gap(_ctx(GapKind.IDLE))
         m = await executor.run_gap(_ctx(GapKind.IDLE, wait_sec=0.01))
         assert "suspend" not in _ops(backend)
         assert m.resumed is False and m.wake_sec == 0.0
 
     async def test_suspend_after_each_tool_call_makes_next_tool_call_wake(self) -> None:
-        executor, backend = _executor(suspend_actor={"after_each_tool_call": True})
+        executor, backend = _executor(actor={"suspend": {"after_each_tool_call": True}})
         await executor.run_gap(_ctx(GapKind.IDLE))
         await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
         m = await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
@@ -202,7 +202,7 @@ class TestSubstrateExecutor:
     async def test_suspend_points_are_independent(self) -> None:
         # After each tool call but not between turns: the idle gap finds the actor
         # running (no suspend, no wake) while tool calls keep paying wakes.
-        executor, backend = _executor(suspend_actor={"between_turns": False, "after_each_tool_call": True})
+        executor, backend = _executor(actor={"suspend": {"between_turns": False, "after_each_tool_call": True}})
         await executor.run_gap(_ctx(GapKind.IDLE))  # cold wake at session start
         await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
         tool = await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
@@ -235,7 +235,7 @@ class TestSubstrateExecutor:
             async def execute(self, name: str, command: str, timeout_sec: float) -> ExecResult:
                 raise RuntimeError("router 503")
 
-        executor = SubstrateToolExecutor(_config(), BrokenRouter(FAKE), name="fake", actor_name_prefix="fake")
+        executor = SubstrateToolExecutor(_config(), BrokenRouter(FAKE), name="fake")
         await executor.run_gap(_ctx(GapKind.IDLE))
         with pytest.raises(ToolExecutionError) as err:
             await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
@@ -244,10 +244,30 @@ class TestSubstrateExecutor:
 
 
 class TestConfig:
-    def test_substrate_type_requires_connection_settings(self) -> None:
-        with pytest.raises(ValueError, match="tool_executor.substrate is required"):
+    def test_substrate_type_requires_actor_identity(self) -> None:
+        with pytest.raises(ValueError, match="actor.atespace and tool_executor.actor.template are required"):
             ToolExecutorConfig(type=ToolExecutorType.SUBSTRATE)
+        cfg = ToolExecutorConfig.model_validate(
+            {"type": "substrate", "actor": {"atespace": "bench", "template": "python-runtime"}}
+        )
+        assert cfg.substrate.api.endpoint == "api.ate-system.svc:443"
 
     def test_rejects_bad_command_template(self) -> None:
-        with pytest.raises(ValueError, match="invalid tool_command_template"):
-            ToolExecutorConfig(tool_command_template="sleep {seconds}")
+        with pytest.raises(ValueError, match="invalid command_template"):
+            ToolExecutorConfig.model_validate({"actor": {"tool_call": {"command_template": "sleep {seconds}"}}})
+
+    def test_nested_actor_block(self) -> None:
+        cfg = ToolExecutorConfig.model_validate(
+            {
+                "actor": {
+                    "name_prefix": "bench",
+                    "assignment": {"rules": [{"match": {"gen_ai.agent.name": "Explore"}, "assign": "dedicated"}]},
+                    "suspend": {"between_turns": False, "after_each_tool_call": True, "snapshot_durability": "sync"},
+                    "tool_call": {"command_template": "true", "timeout_sec": 5},
+                    "delete_on_session_end": False,
+                }
+            }
+        )
+        assert cfg.actor.assignment.resolve({"gen_ai.agent.name": "Explore"}) == ActorAssignment.DEDICATED
+        assert cfg.actor.suspend.after_each_tool_call and not cfg.actor.suspend.between_turns
+        assert cfg.actor.suspend.snapshot_durability.value == "sync"

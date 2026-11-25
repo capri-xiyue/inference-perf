@@ -701,6 +701,7 @@ def test_weka_subagent_calls_carry_agent_identity_for_actor_rules(tmp_path: Path
         ActorAssignment,
         ActorAssignmentConfig,
         ActorAssignmentRule,
+        ActorConfig,
         ToolExecutorConfig,
     )
     from inference_perf.toolexec import resolve_actor_key
@@ -710,13 +711,13 @@ def test_weka_subagent_calls_carry_agent_identity_for_actor_rules(tmp_path: Path
     trace_file = tmp_path / "agents.json"
     trace_file.write_text(json.dumps(trace))
     assignment = ActorAssignmentConfig(
-        rules=[ActorAssignmentRule(match={"gen_ai.agent.name": "Explore"}, actor=ActorAssignment.DEDICATED)]
+        rules=[ActorAssignmentRule(match={"gen_ai.agent.name": "Explore"}, assign=ActorAssignment.DEDICATED)]
     )
     weka_cfg = WekaTraceReplayConfig(
         trace_files=[str(trace_file)],
         datagen_workers=1,
         ignore_trace_delays=True,
-        tool_executor=ToolExecutorConfig(actor_assignment=assignment),
+        tool_executor=ToolExecutorConfig(actor=ActorConfig(assignment=assignment)),
     )
     gen = WekaTraceReplayDataGenerator(
         api_config=APIConfig(type=APIType.Chat, streaming=False),

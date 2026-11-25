@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import aiohttp
 from google.protobuf.message import Message
 
-from inference_perf.config.datagen.toolexec import SubstrateConfig
+from inference_perf.config.datagen.toolexec import ActorConfig, SubstrateConfig
 from inference_perf.toolexec.substrate_executor import ExecResult, SubstrateBackend
 
 if TYPE_CHECKING:
@@ -154,8 +154,13 @@ def _read(path: str) -> bytes:
 
 
 class AteSubstrateBackend(SubstrateBackend):
-    def __init__(self, config: SubstrateConfig) -> None:
+    def __init__(self, config: SubstrateConfig, actor: ActorConfig) -> None:
+        if not actor.atespace or not actor.template:
+            raise ValueError("actor.atespace and actor.template are required for the Substrate backend")
         self.config = config
+        self.atespace: str = actor.atespace
+        self.template: str = actor.template
+        self.execute_path = actor.tool_call.execute_path
         self._msgs = build_ateapi_messages()
         self._channel: Optional["grpc.aio.Channel"] = None
         self._http: Optional[aiohttp.ClientSession] = None
@@ -166,20 +171,20 @@ class AteSubstrateBackend(SubstrateBackend):
         if self._channel is None:
             import grpc
 
-            root = _read(self.config.api_ca_path) if self.config.api_ca_path else None
+            root = _read(self.config.api.ca_path) if self.config.api.ca_path else None
             key: Optional[bytes] = None
             chain: Optional[bytes] = None
-            if self.config.api_cert_bundle_path:
-                key, chain = split_credential_bundle(_read(self.config.api_cert_bundle_path))
+            if self.config.api.cert_bundle_path:
+                key, chain = split_credential_bundle(_read(self.config.api.cert_bundle_path))
             creds = grpc.ssl_channel_credentials(root_certificates=root, private_key=key, certificate_chain=chain)
-            options = [("grpc.ssl_target_name_override", self.config.api_server_name)]
-            self._channel = grpc.aio.secure_channel(self.config.api_endpoint, creds, options=options)
+            options = [("grpc.ssl_target_name_override", self.config.api.server_name)]
+            self._channel = grpc.aio.secure_channel(self.config.api.endpoint, creds, options=options)
         return self._channel
 
     def _metadata(self) -> List[Tuple[str, str]]:
         # Projected tokens rotate, so read the file on every call.
-        if self.config.api_token_path:
-            token = _read(self.config.api_token_path).decode("utf-8").strip()
+        if self.config.api.token_path:
+            token = _read(self.config.api.token_path).decode("utf-8").strip()
             return [("authorization", f"Bearer {token}")]
         return []
 
@@ -193,23 +198,23 @@ class AteSubstrateBackend(SubstrateBackend):
 
     def _get_http(self) -> aiohttp.ClientSession:
         if self._http is None or self._http.closed:
-            ctx = ssl.create_default_context(cafile=self.config.router_ca_path)
-            if self.config.router_cert_bundle_path:
+            ctx = ssl.create_default_context(cafile=self.config.router.ca_path)
+            if self.config.router.cert_bundle_path:
                 # Python's ssl reads the key from the same PEM as the chain.
-                ctx.load_cert_chain(self.config.router_cert_bundle_path)
+                ctx.load_cert_chain(self.config.router.cert_bundle_path)
             timeout = aiohttp.ClientTimeout(total=None)
             self._http = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx, limit=0), timeout=timeout)
         return self._http
 
     def _ref(self, name: str) -> Message:
-        return self._msgs["ObjectRef"](atespace=self.config.atespace, name=name)
+        return self._msgs["ObjectRef"](atespace=self.atespace, name=name)
 
     # ------------------------------------------------------------------ SubstrateBackend
 
     async def create_actor(self, name: str) -> None:
         actor = self._msgs["Actor"](
-            metadata=self._msgs["ResourceMetadata"](atespace=self.config.atespace, name=name),
-            actor_template=self._msgs["ObjectRef"](atespace=self.config.atespace, name=self.config.actor_template),
+            metadata=self._msgs["ResourceMetadata"](atespace=self.atespace, name=name),
+            actor_template=self._msgs["ObjectRef"](atespace=self.atespace, name=self.template),
         )
         await self._call("CreateActor", self._msgs["CreateActorRequest"](actor=actor), "Actor")
 
@@ -226,8 +231,8 @@ class AteSubstrateBackend(SubstrateBackend):
         await self._call("DeleteActor", self._msgs["DeleteActorRequest"](actor=self._ref(name)), "Actor")
 
     async def execute(self, name: str, command: str, timeout_sec: float) -> ExecResult:
-        url = self.config.router_url.rstrip("/") + self.config.execute_path
-        headers = {"ate-target-actor": f"{self.config.atespace}/{name}"}
+        url = self.config.router.url.rstrip("/") + self.execute_path
+        headers = {"ate-target-actor": f"{self.atespace}/{name}"}
         async with self._get_http().post(
             url, json={"command": command}, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout_sec)
         ) as resp:
