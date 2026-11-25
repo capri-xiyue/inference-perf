@@ -108,6 +108,8 @@ WORKER_STARTUP_TIMEOUT_SEC = 300.0
 # terminating (and respawning) workers that still have not reached the stage
 # rendezvous. Report generation therefore always runs.
 _WIND_DOWN_REAP_SECONDS = 10.0
+# Bound on releasing a worker's remaining sandbox actors at stage teardown.
+_TOOL_EXECUTOR_CLOSE_SECONDS = 60.0
 _TEARDOWN_MARGIN_SECONDS = 15.0
 _FORCE_REAP_SECONDS = 20.0
 
@@ -622,6 +624,13 @@ class Worker(PreloadedForkServerProcess):
                     flush()
                 except Exception as e:
                     logger.error(f"[Worker {self.id}] failed to flush partial session progress: {e}")
+            # Release sandbox actors still held for sessions that ended with the stage.
+            aclose_tool_executor = getattr(self.datagen, "aclose_tool_executor", None)
+            if aclose_tool_executor is not None:
+                try:
+                    await wait_for(aclose_tool_executor(), timeout=_TOOL_EXECUTOR_CLOSE_SECONDS)
+                except Exception as e:
+                    logger.error(f"[Worker {self.id}] failed to release tool executor actors: {type(e).__name__}: {e}")
 
     def run(self) -> None:
         """Entry point in the worker process. Nothing below may escape unexplained."""

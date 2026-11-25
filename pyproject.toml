@@ -247,6 +247,8 @@ module = [
     "google.cloud.*",
     "PIL.*",
     "sympy.*",
+    "grpc.*",
+    "google.protobuf.*",
 ]
 ignore_missing_imports = true
 

@@ -30,6 +30,7 @@ from pydantic import BaseModel, ValidationError, model_serializer
 from inference_perf.apis.base import is_stage_teardown_cancelled
 from inference_perf.apis import RequestLifecycleMetric, ResponseMetrics, SessionLifecycleMetric, StreamedResponseMetrics
 from inference_perf.apis.chat import reasoning_field
+from inference_perf.reportgen.agent_session import AgentSessionSummary, compute_agent_turns, summarize_agent_turns
 from inference_perf.apis.response_errors import InBandError
 from inference_perf.payloads import Audios, Images, Videos
 from inference_perf.client.server_metrics import ServerMetricsClient, PerfRuntimeParameters
@@ -1572,6 +1573,12 @@ class ReportGenerator:
         structured_output_excluded_values = [
             float(m.num_structured_output_excluded) for m in metrics if m.num_structured_output_excluded is not None
         ]
+        # Agent-session (tool executor) metrics. Omitted entirely for runs without a
+        # tool executor, so their summaries are unchanged.
+        agent_summary: dict[str, AgentSessionSummary] = {}
+        agent_turns = [t for m in metrics if m.agent_turns for t in m.agent_turns]
+        if agent_turns:
+            agent_summary = {"agent_session": summarize_agent_turns(agent_turns, percentiles, summarize)}
 
         return {
             "num_sessions": num_sessions_completed + sessions_not_completed,
@@ -1620,6 +1627,7 @@ class ReportGenerator:
             "tfut_none_reasons": dict(tfut_none_reasons) if tfut_none_reasons else None,
             "num_user_facing_events": summarize(num_uf_events_values, percentiles),
             "num_structured_output_excluded": summarize(structured_output_excluded_values, percentiles),
+            **agent_summary,
         }
 
     def _enrich_sessions(
@@ -1648,9 +1656,13 @@ class ReportGenerator:
         cache_by_session: dict[str, tuple[int, int]] = {}
         # Index requests by (session_id, event_id) for TFUT lookup
         requests_by_session_event: dict[str, dict[str, RequestLifecycleMetric]] = defaultdict(dict)
+        # Requests that ran a tool-executor gap, for agent turn reconstruction.
+        agent_requests_by_session: dict[str, List[RequestLifecycleMetric]] = defaultdict(list)
 
         for m in request_metrics:
             if m.session_id:
+                if m.info.agent_gap is not None and not is_stage_teardown_cancelled(m.error):
+                    agent_requests_by_session[m.session_id].append(m)
                 inp, out = token_by_session[m.session_id]
                 token_by_session[m.session_id] = (
                     inp + m.info.request_metrics.text.input_tokens,
@@ -1702,6 +1714,10 @@ class ReportGenerator:
 
             # Compute TFUT
             ReportGenerator._compute_tfut(sm, requests_by_session_event.get(sm.session_id, {}))
+
+            agent_requests = agent_requests_by_session.get(sm.session_id)
+            if agent_requests:
+                sm.agent_turns = compute_agent_turns(agent_requests)
 
     @staticmethod
     def _compute_tfut(

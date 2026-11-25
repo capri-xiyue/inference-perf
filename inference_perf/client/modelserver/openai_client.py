@@ -991,6 +991,8 @@ class openAIModelServerClientSession(ModelServerClientSession):
             info.labels = data.labels
         if data.graph_event_id:
             info.graph_event_id = data.graph_event_id
+        if data.agent_gap is not None:
+            info.agent_gap = data.agent_gap
 
         # Only a successful body is stripped. A failed one is kept whole because it
         # carries the server's error message, including a 200 recorded as a failure.

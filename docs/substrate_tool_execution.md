@@ -1,0 +1,131 @@
+# Tool Execution on GKE Agent Substrate (PoC)
+
+> Status: proof of concept on branch `capri-xiyue/agentic-poc`.
+
+Session replay (Weka, OTel, TraceLab and synthetic agentic traces) models
+everything between two LLM calls — tool execution and user think time — as a
+plain sleep of the recorded gap. With `tool_executor` set, that gap runs on a
+[GKE Agent Substrate](https://github.com/agent-substrate/substrate) **actor**
+instead. inference-perf is still the agent harness and LLM calls still go to the
+model server (for example llm-d through the Inference Gateway), but each replayed
+session now also exercises a real sandbox: the actor is created, suspended while
+the user is idle, woken for the next turn, and runs every tool call.
+
+The run then reports agent-session metrics from "Measuring Agent Sessions":
+turn latency, **Wake-to-First-Token latency (Lwake-TTFT)**, actor wake, tool
+execution time and `alpha_inf`.
+
+## How a gap is executed
+
+Each event's gap is classified before the event is dispatched:
+
+| Gap | When | What the executor does |
+|---|---|---|
+| `idle` | The session's first request; or a gap of at least `idle_gap_threshold_ms` (default 5000) that is not followed by a `role: tool` message | Suspend the actor (`suspend_on_idle`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
+| `tool` | The request's last message is `role: tool`; or a shorter non-zero gap (Weka traces carry no tool roles) | Wake the actor if needed, then run `tool_command_template` in it (default `sleep {duration_sec}`, so the in-actor time matches the trace). |
+| `none` | Zero-length gap | Nothing. |
+
+Actors:
+
+- By default every call — main agent and subagents alike — runs its gaps on the session's shared actor, as Claude Code subagents share their parent's machine. `actor_assignment.rules` give selected agents a **dedicated** actor: one per agent instance (`gen_ai.agent.id`, else `gen_ai.agent.name`), shared by that agent's parallel streams. Rules match the call's attributes with glob patterns; the first match wins, and `default` (`session`) applies otherwise. A dedicated rule on a call with no agent attributes falls back to the session actor.
+
+  Agent identity comes from the OTel GenAI attributes `gen_ai.agent.name` / `gen_ai.agent.id`. OTel traces carry them on their spans (any other span attribute can be matched too); Weka replay sets them on subagent calls (`name` = `subagent_type`, `id` = `agent_id`). Main-agent calls in Weka carry neither, so they follow `default`.
+
+  ```yaml
+  actor_assignment:
+    rules:                                           # everything else shares the session actor
+      - match: {gen_ai.agent.name: "Explore"}        # code-search subagents get their own sandbox
+        actor: dedicated
+  ```
+
+- Actors never talk to each other — inference-perf passes outputs between them, as it already does between graph events.
+- Actors are deleted when their session drains, and any left at the end of a stage are deleted at teardown.
+
+Waking:
+
+- `resume_mode: explicit` (default) calls `ResumeActor` and times it directly.
+- `resume_mode: implicit` sends traffic straight to `atenet-router`, which parks the request and resumes the actor. Wake time is then estimated as request time minus the tool's own duration (`wake_estimated: true`).
+- `suspend_during_inference: true` also suspends after every tool call (off the request path), so each tool call pays a wake.
+
+## Metrics
+
+Every request whose gap ran on the executor carries `info.agent_gap` in
+`per_request_lifecycle_metrics.json`:
+
+```json
+"agent_gap": {
+  "gap_kind": "idle", "executor": "substrate", "trace_wait_sec": 6.7,
+  "actor": "ip-3f2a1c-6b0e...", "suspend_sec": 0.17,
+  "wake_start": 812.31, "wake_sec": 0.37, "resumed": true, "cold": false,
+  "tool_exec_sec": null, "gap_start": 805.43, "gap_end": 812.68
+}
+```
+
+Sessions get `agent_turns` in `per_session_lifecycle_metrics.json`, and
+`summary_session_lifecycle_metrics.json` gets an `agent_session` block, split
+into `cold` (first turn: restore from the template's golden snapshot) and
+`warm` turns:
+
+| Field | Definition |
+|---|---|
+| `turn_latency_sec` | Lturn: wake trigger → end of the turn's last LLM call |
+| `wake_to_first_token_sec` | **Lwake-TTFT**: wake trigger → first output token of the turn's first LLM call (= Lwake + Lharness + TTFT, measured) |
+| `wake_sec` | Lwake (Lsandbox_restore): actor resume time |
+| `harness_sec` | Lharness: actor ready → LLM request sent (inference-perf overhead) |
+| `first_call_ttft_sec` | TTFT of the turn's first call alone |
+| `alpha_inf` | Σ LLM call latency / Lturn (serial sum; can exceed 1 with parallel subagents) |
+| `tool_exec_sec` | Ltool_exec per tool call (round trip through the router, incl. in-actor time) |
+| `tool_wake_sec` | Wakes paid by tool calls (with `suspend_during_inference`) |
+
+Omitting `tool_executor` leaves every report byte-identical to a run without it.
+
+## Configuration
+
+```yaml
+data:
+  type: weka_trace_replay
+  weka_trace_replay:
+    hf_dataset_path: semianalysisai/cc-traces-weka-with-subagents-060826-256k
+    tool_executor:
+      type: substrate            # or fake_substrate (no cluster)
+      idle_gap_threshold_ms: 5000
+      actor_assignment:
+        default: session
+        rules:
+          - match: {gen_ai.agent.name: "Explore"}
+            actor: dedicated
+      resume_mode: explicit
+      suspend_on_idle: true
+      tool_command_template: "sleep {duration_sec:.3f}"
+      substrate:
+        atespace: inference-perf
+        actor_template: python-runtime
+        api_endpoint: api.ate-system.svc:443
+        api_ca_path: /run/servicedns-ca/ca.crt
+        api_token_path: /run/ate-token/token
+        router_url: https://atenet-router.ate-system.svc
+        router_ca_path: /run/router-ca/ca.crt
+        router_cert_bundle_path: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+```
+
+`type: fake_substrate` runs the same lifecycle against an in-process stand-in
+whose latencies come from `tool_executor.fake` (cold/warm resume, suspend,
+create, exec overhead, jitter). Use it to try the metrics without a cluster.
+
+## Running against a real Substrate install
+
+The backend talks to ateapi over gRPC (`substrate.ateapi.v1.Control`) and to
+actors through `atenet-router`, so inference-perf runs as a Pod in the cluster:
+
+1. Label the benchmark namespace `ate.dev/api-access=true` (ate-system's NetworkPolicies admit API clients only from labeled namespaces).
+2. Authenticate to ateapi with a projected ServiceAccount token (audience `api.ate-system.svc`, `api_token_path`) or a pod certificate (`api_cert_bundle_path`); verify it with the `servicedns.podcert.ate.dev/identity` ClusterTrustBundle (`api_ca_path`).
+3. `atenet-router` accepts mTLS only: project a pod certificate (`router_cert_bundle_path`) and add the Pod's SPIFFE ID to the router's `--ingress-allowed-spiffe-ids`.
+4. Create an ActorTemplate whose container serves the agent-sandbox runtime API (`POST /execute {"command": ...}` → `{stdout, stderr, exit_code}`) on the actor's **default ingress port (80)**, plus a WorkerPool sized for the concurrency you replay.
+
+## PoC limitations
+
+- Tool output is not fed back into the next prompt; the recorded tool result is kept so prompt lengths and KV-cache behavior match the trace.
+- The data plane uses the actor's default port; reaching a non-default port needs an HTTP `CONNECT` tunnel through the router, which is not implemented.
+- Wake and the next LLM call are sequential. Overlapping them (KV prefetch / "Wake Hint" to the llm-d EPP) is not modeled yet.
+- The LLM call does not traverse the actor's egress gateway (inference-perf is the harness, outside the actor), so Lgateway is not measured.
+- `grpcio` and `protobuf` must be importable for `type: substrate` (they are installed with the `otel` extra).

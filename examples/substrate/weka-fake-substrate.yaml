@@ -1,0 +1,39 @@
+# Weka trace replay with tool gaps executed on an in-process fake of GKE Agent
+# Substrate. Exercises the actor lifecycle and agent-session metrics without a
+# cluster; point server.base_url at any OpenAI-compatible server (for example
+# llm-d-inference-sim).
+load:
+  type: trace_session_replay
+  stages:
+    - concurrent_sessions: 4
+      num_sessions: 8
+  num_workers: 2
+  worker_max_concurrency: 100
+  request_timeout: 60
+api:
+  type: chat
+  streaming: true
+server:
+  type: vllm
+  model_name: HuggingFaceTB/SmolLM2-135M-Instruct
+  base_url: http://localhost:8000
+tokenizer:
+  pretrained_model_name_or_path: HuggingFaceTB/SmolLM2-135M-Instruct
+data:
+  type: weka_trace_replay
+  weka_trace_replay:
+    hf_dataset_path: semianalysisai/cc-traces-weka-with-subagents-060826-256k
+    num_dataset_entries: 8
+    use_static_model: true
+    static_model_name: HuggingFaceTB/SmolLM2-135M-Instruct
+    tool_executor:
+      type: fake_substrate
+      idle_gap_threshold_ms: 5000
+      fake:
+        cold_resume_latency_ms: 1000
+        warm_resume_latency_ms: 400
+        suspend_latency_ms: 200
+report:
+  session_lifecycle:
+    summary: true
+    per_session: true

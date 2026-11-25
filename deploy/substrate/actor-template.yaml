@@ -1,0 +1,39 @@
+# ActorTemplate (protojson-shaped substrate.ateapi.v1.ActorTemplate) for the
+# inference-perf tool executor. Each replayed session's actor is created from it.
+#
+#   kubectl ate create atespace inference-perf
+#   kubectl ate create actor-template -f deploy/substrate/actor-template.yaml
+#
+# The container serves the agent-sandbox runtime API (POST /execute) on port 80,
+# the actor's default ingress port, which is where atenet-router forwards plain
+# requests. Pair it with a WorkerPool (apiVersion ate.dev/v1) whose labels match
+# workerSelector; see the Substrate docs for the pool spec of your install.
+metadata:
+  atespace: inference-perf
+  name: python-runtime
+workerSelector:
+  matchLabels:
+    workload: inference-perf-tools
+containers:
+- name: python-runtime
+  image: registry.k8s.io/agent-sandbox/python-runtime-sandbox:v0.5.6@sha256:147a6a7f3b382683a065e4519b22088e75472317ce861d57031537a758836ab5
+  command:
+  - uvicorn
+  - main:app
+  - --app-dir
+  - /app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "80"
+  wakeupProbe:
+    httpGet:
+      path: /
+      port: 80
+    timeoutSeconds: 30
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY

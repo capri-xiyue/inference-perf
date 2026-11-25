@@ -65,8 +65,17 @@ from inference_perf.payloads import Image, Images, RequestMetrics, Text
 from inference_perf.apis.streaming_parser import parse_sse_stream
 from inference_perf.config import APIConfig, APIType, DataConfig, SessionReplayConfig
 from inference_perf.config.datagen.replay import BadToolCallHandling, ToolChoiceMode
+from inference_perf.config.datagen.toolexec import ToolExecutorConfig
 from inference_perf.datagen.base import LazyLoadDataMixin, SessionGenerator
 from inference_perf.datagen.replay.replay_graph_types import InputSegment, ReplayGraph
+from inference_perf.toolexec import (
+    GapContext,
+    ToolExecutionError,
+    ToolExecutor,
+    build_tool_executor,
+    classify_gap,
+    resolve_actor_key,
+)
 from inference_perf.utils.custom_tokenizer import CustomTokenizer
 
 logger = logging.getLogger(__name__)
@@ -217,6 +226,7 @@ class SessionFailureCause(str, Enum):
     RECORDED_FALLBACK_MALFORMED = "recorded_fallback_malformed"
     SUBSTITUTION_TOOL_CALL_EXPECTED = "substitution_tool_call_expected"
     REQUEST_FAILED = "request_failed"
+    TOOL_EXECUTION_FAILED = "tool_execution_failed"
     UNKNOWN = "unknown"
 
 
@@ -480,6 +490,9 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
     # output; the recorded assistant messages are sent as-is. Predecessor wait
     # timing is still enforced.
     disable_output_substitution: bool = False
+    # The graph call's attributes (e.g. gen_ai.agent.name); select the actor that runs
+    # this event's gap when a tool executor is configured.
+    call_attributes: Optional[Dict[str, object]] = None
     # Set by _build_messages_with_substitution when it calls record_failure
     # early (e.g. recorded fallback also malformed). Lets the caller pass the
     # right cause code and reason string to _fail_and_notify instead of a
@@ -667,7 +680,10 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                 return
             logger.debug(f"Event {self.event_id} all predecessors done")
 
-        if self.wait_ms > 0:
+        if self.generator is not None and self.generator.has_tool_executor():
+            if not await self._run_gap_with_tool_executor(session_id):
+                return
+        elif self.wait_ms > 0:
             wait_sec = self.wait_ms / 1000.0
             logger.debug(f"Event {self.event_id} waiting {wait_sec:.3f}s (wait_ms={self.wait_ms})")
             await asyncio.sleep(wait_sec)
@@ -708,6 +724,39 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                 for m in substituted
             ]
             logger.debug(f"Event {self.event_id} substitution/injection complete, {len(self.messages)} messages")
+
+    async def _run_gap_with_tool_executor(self, session_id: str) -> bool:
+        """Run this event's gap on the tool executor instead of sleeping.
+
+        Records the gap on self.agent_gap. Returns False when the gap failed, after
+        failing this event and its session.
+        """
+        assert self.generator is not None
+        executor = self.generator.get_tool_executor()
+        executor_config = self.generator.get_tool_executor_config()
+        assert executor is not None and executor_config is not None
+        actor_key = resolve_actor_key(executor_config.actor_assignment, session_id, self.call_attributes or {})
+        last_role = self.original_messages[-1].get("role") if self.original_messages else None
+        ctx = GapContext(
+            session_id=session_id,
+            actor_key=actor_key,
+            event_id=self.event_id,
+            wait_sec=self.wait_ms / 1000.0,
+            gap_kind=classify_gap(
+                has_predecessors=bool(self.predecessor_event_ids),
+                wait_ms=self.wait_ms,
+                last_message_role=last_role if isinstance(last_role, str) else None,
+                idle_gap_threshold_ms=executor_config.idle_gap_threshold_ms,
+            ),
+        )
+        logger.debug(f"Event {self.event_id} running {ctx.gap_kind.value} gap ({ctx.wait_sec:.3f}s) on {executor.name}")
+        try:
+            self.agent_gap = await executor.run_gap(ctx)
+        except ToolExecutionError as e:
+            self.agent_gap = e.metrics
+            self._fail_and_notify(session_id, SessionFailureCause.TOOL_EXECUTION_FAILED, f"tool execution failed: {e}")
+            return False
+        return True
 
     def _build_messages_with_substitution(self) -> List[Dict[str, Any]]:
         # NOTE: when input_segments is empty, the original_messages list is returned
@@ -1517,6 +1566,38 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
         self._corpus_session_count: int = 0
         self._cycle_base_ids: List[str] = []
         self._cycle_logged: bool = False
+        # Built lazily in the process that runs requests (a worker), never pickled.
+        self._tool_executor: Optional[ToolExecutor] = None
+
+    def __getstate__(self) -> Dict[str, object]:
+        state = self.__dict__.copy()
+        # Holds open connections and event-loop-bound objects; each worker builds its own.
+        state["_tool_executor"] = None
+        return state
+
+    def get_tool_executor_config(self) -> Optional[ToolExecutorConfig]:
+        replay_config = getattr(self, "replay_config", None)
+        config = getattr(replay_config, "tool_executor", None)
+        return config if isinstance(config, ToolExecutorConfig) else None
+
+    def has_tool_executor(self) -> bool:
+        return self.get_tool_executor_config() is not None
+
+    def get_tool_executor(self) -> Optional[ToolExecutor]:
+        """This process's tool executor, built on first use; None when not configured."""
+        config = self.get_tool_executor_config()
+        if config is None:
+            return None
+        if getattr(self, "_tool_executor", None) is None:
+            self._tool_executor = build_tool_executor(config, seed=getattr(self, "base_seed", None))
+        return self._tool_executor
+
+    async def aclose_tool_executor(self) -> None:
+        """Release the actors still held by this process (end of a stage) and close connections."""
+        executor = getattr(self, "_tool_executor", None)
+        self._tool_executor = None
+        if executor is not None:
+            await executor.aclose()
 
     def initialize_sessions(self, sessions: List[ReplaySession]) -> None:
         """Finalize generator state from fully-built sessions (eager path)."""
@@ -2225,6 +2306,7 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
             else False,
             # Back-reference so the event can evict this session from the worker once drained.
             generator=self,
+            call_attributes=dict(gc.attributes) if gc and gc.attributes and self.has_tool_executor() else None,
         )
         api_data.graph_event_id = raw_event_id
         return api_data
@@ -2276,4 +2358,11 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
         tracker = getattr(self, "worker_tracker", None)
         if tracker is not None:
             tracker.forget_session(session_id)
+        executor = getattr(self, "_tool_executor", None)
+        if executor is not None:
+            # Release the session's actors off the request path.
+            try:
+                executor.schedule_end_session(session_id)
+            except RuntimeError:
+                logger.warning("No running event loop to release actors of session %s", session_id)
         logger.debug("Worker evicted fully-drained session %s", session_id)
