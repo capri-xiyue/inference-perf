@@ -696,60 +696,6 @@ def test_weka_session_id_setting_preserves_graph_content(tmp_path: Path) -> None
     assert separated_graph == default_graph
 
 
-def test_weka_subagent_calls_carry_agent_identity_for_actor_rules(tmp_path: Path) -> None:
-    from inference_perf.config.datagen.toolexec import (
-        ActorAssignment,
-        ActorAssignmentConfig,
-        ActorAssignmentRule,
-        ActorConfig,
-        ToolExecutorConfig,
-    )
-    from inference_perf.toolexec import resolve_actor_key
-
-    trace = _subagent_session_trace()
-    trace["requests"][2]["subagent_type"] = "Explore"  # beta
-    trace_file = tmp_path / "agents.json"
-    trace_file.write_text(json.dumps(trace))
-    assignment = ActorAssignmentConfig(
-        rules=[ActorAssignmentRule(match={"gen_ai.agent.name": "Explore"}, assign=ActorAssignment.DEDICATED)]
-    )
-    weka_cfg = WekaTraceReplayConfig(
-        trace_files=[str(trace_file)],
-        datagen_workers=1,
-        ignore_trace_delays=True,
-        tool_executor=ToolExecutorConfig(actor=ActorConfig(assignment=assignment)),
-    )
-    gen = WekaTraceReplayDataGenerator(
-        api_config=APIConfig(type=APIType.Chat, streaming=False),
-        config=DataConfig(type=DataGenType.WekaTraceReplay, weka_trace_replay=weka_cfg),
-        tokenizer=_mock_tokenizer(),
-        num_workers=1,
-    )
-    session = gen._get_session(0)
-    actor_by_call: dict[str, Optional[str]] = {}
-    for lazy_data in gen.get_session_events(0):
-        lazy_data.session_id = session.session_id
-        request = LazyLoadDataMixin.get_request(gen, lazy_data)
-        assert isinstance(request, SessionChatCompletionAPIData) and request.graph_event_id is not None
-        call = session.graph.events[request.graph_event_id].call
-        if call.call_id.startswith("sa_"):
-            agent_id = call.call_id.split("_")[1]
-            assert request.call_attributes is not None
-            assert request.call_attributes["gen_ai.agent.id"] == agent_id
-        else:
-            assert request.call_attributes is None
-        actor_by_call[call.call_id] = resolve_actor_key(assignment, session.session_id, request.call_attributes or {})
-    sid = session.session_id
-    assert actor_by_call == {
-        "parent_turn_0": sid,
-        "parent_turn_1": sid,
-        "sa_alpha_s0_turn_0": sid,  # "Subagent" type: no rule, shares the session actor
-        "sa_alpha_s0_turn_1": sid,
-        "sa_alpha_s1_turn_0": sid,
-        "sa_beta_s0_turn_0": f"{sid}::agent:beta",  # "Explore": dedicated actor
-    }
-
-
 def _build_generator(trace_files: list[str], datagen_workers: int, skip_invalid_files: bool) -> WekaTraceReplayDataGenerator:
     from inference_perf.config.datagen.replay import WekaTraceReplayConfig
 

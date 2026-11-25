@@ -22,8 +22,8 @@ import pytest
 from aiohttp import web
 from google.protobuf.message import Message
 
-from inference_perf.config.datagen.toolexec import SubstrateConfig
-from inference_perf.toolexec.ate_backend import AteSubstrateBackend, build_ateapi_messages, split_credential_bundle
+from inference_perf.config.sandbox import SubstrateConfig
+from inference_perf.sandbox.ate_backend import AteSubstrateBackend, build_ateapi_messages, split_credential_bundle
 
 
 class TestWireFormat:

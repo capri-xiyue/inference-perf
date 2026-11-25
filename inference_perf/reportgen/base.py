@@ -30,7 +30,12 @@ from pydantic import BaseModel, ValidationError, model_serializer
 from inference_perf.apis.base import is_stage_teardown_cancelled
 from inference_perf.apis import RequestLifecycleMetric, ResponseMetrics, SessionLifecycleMetric, StreamedResponseMetrics
 from inference_perf.apis.chat import reasoning_field
-from inference_perf.reportgen.agent_session import AgentSessionSummary, compute_agent_turns, summarize_agent_turns
+from inference_perf.reportgen.agent_session import (
+    AgentSessionSummary,
+    compute_agent_turns,
+    compute_session_sandbox,
+    summarize_agent_session,
+)
 from inference_perf.apis.response_errors import InBandError
 from inference_perf.payloads import Audios, Images, Videos
 from inference_perf.client.server_metrics import ServerMetricsClient, PerfRuntimeParameters
@@ -1573,12 +1578,13 @@ class ReportGenerator:
         structured_output_excluded_values = [
             float(m.num_structured_output_excluded) for m in metrics if m.num_structured_output_excluded is not None
         ]
-        # Agent-session (tool executor) metrics. Omitted entirely for runs without a
-        # tool executor, so their summaries are unchanged.
+        # Agent-session (sandbox) metrics. Omitted entirely for runs without a sandbox,
+        # so their summaries are unchanged.
         agent_summary: dict[str, AgentSessionSummary] = {}
         agent_turns = [t for m in metrics if m.agent_turns for t in m.agent_turns]
         if agent_turns:
-            agent_summary = {"agent_session": summarize_agent_turns(agent_turns, percentiles, summarize)}
+            agent_gaps = [g for m in metrics if m.agent_gaps for g in m.agent_gaps]
+            agent_summary = {"agent_session": summarize_agent_session(agent_turns, agent_gaps, percentiles, summarize)}
 
         return {
             "num_sessions": num_sessions_completed + sessions_not_completed,
@@ -1656,7 +1662,7 @@ class ReportGenerator:
         cache_by_session: dict[str, tuple[int, int]] = {}
         # Index requests by (session_id, event_id) for TFUT lookup
         requests_by_session_event: dict[str, dict[str, RequestLifecycleMetric]] = defaultdict(dict)
-        # Requests that ran a tool-executor gap, for agent turn reconstruction.
+        # Requests whose gap ran on the sandbox, for agent turn reconstruction.
         agent_requests_by_session: dict[str, List[RequestLifecycleMetric]] = defaultdict(list)
 
         for m in request_metrics:
@@ -1718,6 +1724,8 @@ class ReportGenerator:
             agent_requests = agent_requests_by_session.get(sm.session_id)
             if agent_requests:
                 sm.agent_turns = compute_agent_turns(agent_requests)
+                sm.sandbox = compute_session_sandbox(agent_requests)
+                sm.agent_gaps = [r.info.agent_gap for r in agent_requests if r.info.agent_gap is not None]
 
     @staticmethod
     def _compute_tfut(

@@ -28,9 +28,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from inference_perf.apis.agent_gap import AgentGapMetrics, GapKind
-from inference_perf.config.datagen.toolexec import SnapshotDurability, ToolExecutorConfig
-from inference_perf.toolexec.base import GapContext, ToolExecutionError, ToolExecutor
+from inference_perf.apis.agent_gap import AgentGapMetrics, GapKind, ToolCallMetrics
+from inference_perf.config.sandbox import SandboxConfig, SnapshotDurability
+from inference_perf.sandbox.base import GapContext, PlannedTool, ToolExecutionError, ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def _now() -> float:
 
 
 class SubstrateToolExecutor(ToolExecutor):
-    def __init__(self, config: ToolExecutorConfig, backend: SubstrateBackend, name: str) -> None:
+    def __init__(self, config: SandboxConfig, backend: SubstrateBackend, name: str) -> None:
         super().__init__()
         self.config = config
         self.backend = backend
@@ -93,6 +93,8 @@ class SubstrateToolExecutor(ToolExecutor):
         # Actor names must not collide across worker processes or runs.
         self._run_id = uuid.uuid4().hex[:6]
         self._actors: Dict[str, _ActorState] = {}
+        # Current turn of each session; an idle gap starts the next one.
+        self._turns: Dict[str, int] = {}
 
     def actor_name(self, actor_key: str) -> str:
         digest = hashlib.sha1(actor_key.encode("utf-8")).hexdigest()[:12]
@@ -136,38 +138,43 @@ class SubstrateToolExecutor(ToolExecutor):
                 logger.warning("Background suspend of actor %s failed: %s", actor.name, e)
 
     async def _wake(self, actor: _ActorState, metrics: AgentGapMetrics) -> None:
-        """Wake the actor with ResumeActor and record the wake on metrics."""
+        """Make the actor serve, recording the wake on metrics.
+
+        The wake starts when the actor is needed: waiting out a background suspend
+        still in flight (after_each_tool_call) is part of it. Leaves actor_ready_sec
+        unset when the actor was already running.
+        """
+        ready_start = _now()
+        metrics.actor_ready_start = ready_start
         await self._await_pending_suspend(actor)
         async with actor.lock:
-            metrics.wake_start = _now()
             if not actor.suspended:
-                metrics.wake_sec = 0.0
-                metrics.resumed = False
                 return
             metrics.cold = not actor.ever_resumed
-            metrics.resumed = await self.backend.resume_actor(actor.name)
-            metrics.wake_sec = _now() - metrics.wake_start
+            await self.backend.resume_actor(actor.name)
+            metrics.actor_ready_sec = _now() - ready_start
             actor.suspended = False
             actor.ever_resumed = True
 
     # ------------------------------------------------------------------ gaps
 
     async def run_gap(self, ctx: GapContext) -> AgentGapMetrics:
+        if ctx.gap_kind == GapKind.IDLE:
+            self._turns[ctx.session_id] = self._turns.get(ctx.session_id, -1) + 1
         metrics = AgentGapMetrics(
+            turn_index=max(self._turns.get(ctx.session_id, 0), 0),
             gap_kind=ctx.gap_kind,
             executor=self.name,
             trace_wait_sec=ctx.wait_sec,
             gap_start=_now(),
-            tool_names=ctx.tool_names,
         )
         try:
-            if ctx.gap_kind == GapKind.NONE:
-                if ctx.wait_sec > 0:
-                    await asyncio.sleep(ctx.wait_sec)
-            elif ctx.gap_kind == GapKind.IDLE:
+            if ctx.gap_kind == GapKind.IDLE:
                 await self._run_idle_gap(ctx, metrics)
-            else:
+            elif ctx.gap_kind == GapKind.TOOL and ctx.tools:
                 await self._run_tool_gap(ctx, metrics)
+            # Unclassified gaps, and tool gaps without recorded tools, keep the plain wait.
+            await self._wait_rest_of_gap(ctx, metrics)
         except asyncio.CancelledError:
             raise
         except ToolExecutionError:
@@ -177,7 +184,17 @@ class SubstrateToolExecutor(ToolExecutor):
             metrics.gap_end = _now()
             raise ToolExecutionError(metrics.error, metrics) from e
         metrics.gap_end = _now()
+        if any(t.error is not None for t in metrics.tools):
+            failed = next(t for t in metrics.tools if t.error is not None)
+            metrics.error = f"tool {failed.name}: {failed.error}"
+            raise ToolExecutionError(metrics.error, metrics)
         return metrics
+
+    @staticmethod
+    async def _wait_rest_of_gap(ctx: GapContext, metrics: AgentGapMetrics) -> None:
+        remaining = ctx.wait_sec - (_now() - metrics.gap_start)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
     async def _run_idle_gap(self, ctx: GapContext, metrics: AgentGapMetrics) -> None:
         actor = await self._get_actor(ctx, metrics)
@@ -185,33 +202,49 @@ class SubstrateToolExecutor(ToolExecutor):
             await self._await_pending_suspend(actor)
             metrics.suspend_sec = await self._suspend(actor)
         # The user is idle for the rest of the recorded gap; suspend time counts toward it.
-        remaining = ctx.wait_sec - (_now() - metrics.gap_start)
-        if remaining > 0:
-            await asyncio.sleep(remaining)
+        await self._wait_rest_of_gap(ctx, metrics)
         await self._wake(actor, metrics)
 
     async def _run_tool_gap(self, ctx: GapContext, metrics: AgentGapMetrics) -> None:
+        """Wake the actor once, then run every recorded tool at its recorded offset, concurrently."""
         actor = await self._get_actor(ctx, metrics)
         await self._wake(actor, metrics)
-        if metrics.resumed is False:
-            # Already running: no wake happened for this tool call.
-            metrics.wake_start = None
-            metrics.wake_sec = None
-        command = self.config.actor.tool_call.command_template.format(duration_sec=ctx.wait_sec)
+        metrics.tools = [ToolCallMetrics(name=t.name, start_sec=t.start_sec, duration_sec=t.duration_sec) for t in ctx.tools]
         actor.inflight_tools += 1
         try:
-            t0 = _now()
-            result = await self.backend.execute(actor.name, command, self.config.actor.tool_call.timeout_sec)
-            metrics.tool_exec_sec = _now() - t0
+            await asyncio.gather(
+                *(
+                    self._run_tool(actor, ctx, metrics.gap_start, planned, m)
+                    for planned, m in zip(ctx.tools, metrics.tools, strict=True)
+                )
+            )
         finally:
             actor.inflight_tools -= 1
-        metrics.tool_exit_code = result.exit_code
-        if result.exit_code != 0:
-            logger.debug("Tool in actor %s exited %d (event %s)", actor.name, result.exit_code, ctx.event_id)
-
         if self.config.actor.suspend.after_each_tool_call and actor.pending_suspend is None:
             # Suspend while the next LLM call runs, off the request's critical path.
             actor.pending_suspend = asyncio.get_running_loop().create_task(self._suspend(actor))
+
+    async def _run_tool(
+        self, actor: _ActorState, ctx: GapContext, gap_start: float, planned: PlannedTool, m: ToolCallMetrics
+    ) -> None:
+        delay = gap_start + planned.start_sec - _now()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        command = f"sleep {planned.duration_sec:.3f}"
+        t0 = _now()
+        try:
+            result = await self.backend.execute(actor.name, command, self.config.actor.tool_call.timeout_sec)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            m.error = f"{type(e).__name__}: {e}"
+            return
+        finally:
+            m.tool_exec_sec = _now() - t0
+            m.tool_exec_overhead_sec = m.tool_exec_sec - planned.duration_sec
+        m.exit_code = result.exit_code
+        if result.exit_code != 0:
+            logger.debug("Tool %s in actor %s exited %d (event %s)", planned.name, actor.name, result.exit_code, ctx.event_id)
 
     # ------------------------------------------------------------------ teardown
 
@@ -225,6 +258,7 @@ class SubstrateToolExecutor(ToolExecutor):
             logger.warning("Failed to delete actor %s: %s", actor.name, e)
 
     async def end_session(self, session_id: str) -> None:
+        self._turns.pop(session_id, None)
         if not self.config.actor.delete_on_session_end:
             return
         keys = [k for k, a in self._actors.items() if a.session_id == session_id]

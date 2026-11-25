@@ -1,15 +1,16 @@
 # Running inference-perf against GKE Agent Substrate
 
-Manifests for running the tool-executor PoC on a GKE cluster with Agent
-Substrate installed. See [docs/substrate_tool_execution.md](../../docs/substrate_tool_execution.md)
-for what the tool executor does and the metrics it reports.
+Manifests for the sandbox benchmark: TraceLab session replay with every recorded
+tool call executed in a GKE Agent Substrate actor and LLM calls served by llm-d.
+See [docs/sandbox.md](../../docs/sandbox.md) for what the sandbox does and the
+metrics it reports.
 
 | File | What it creates |
 |---|---|
 | `worker-pool.yaml` | Namespace `ip-bench` (labeled `ate.dev/api-access=true`), ServiceAccount `inference-perf`, and a gVisor `WorkerPool` |
 | `actor-template.yaml` | ActorTemplate `ip-bench/python-runtime`: the agent-sandbox runtime serving `POST /execute` on port 80 |
 | `access-policy.yaml` | Editor on the `ip-bench` atespace for the inference-perf pod's SPIFFE identity |
-| `vllm-qwen3-l4.yaml` | Optional LLM backend: vLLM serving Qwen3-0.6B (128K context via YaRN) on one spot L4 |
+| `llm-d/` | Kustomize overlay of the llm-d optimized-baseline model server: Qwen3-30B-A3B-Instruct-2507-FP8, TP1, 256K context, one replica per H100 |
 | `inference-perf-job.yaml` | The benchmark: config in a ConfigMap, a Job with the pod certificate and Substrate CA projected |
 
 ## Steps
@@ -28,7 +29,8 @@ for what the tool executor does and the metrics it reports.
      --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ip-bench/sa/inference-perf
    ```
 
-2. **Worker pool, atespace, template, access** (`kubectl ate` from the same checkout):
+2. **Worker pool, atespace, template, access** (`kubectl ate` from the same checkout).
+   Size the WorkerPool for the number of concurrent sessions (one actor each):
 
    ```bash
    kubectl apply -f worker-pool.yaml
@@ -40,20 +42,31 @@ for what the tool executor does and the metrics it reports.
    kubectl ate --token-file ate.token get actor-template -a ip-bench
    ```
 
-3. **LLM backend.** Point `server.base_url` at your llm-d gateway, or apply
-   `vllm-qwen3-l4.yaml` after adding a spot L4 node pool. The Deployment sets
-   `enableServiceLinks: false`: a Service named `vllm` otherwise injects
-   `VLLM_PORT=tcp://...`, which vLLM refuses to start with.
-
-4. **Trace and benchmark.** Build the image with the `otel` dependency group
-   (it brings `grpcio`), put the trace in a ConfigMap, and run the Job:
+3. **LLM backend: llm-d in Gateway mode.** Enable the GKE Gateway API, create a
+   `gke-l7-rilb` Gateway, install the llm-d router from the
+   [optimized-baseline guide](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline)
+   with `provider.name=gke,httpRoute.create=true`, then the model servers on an
+   H100 node pool (a3-highgpu-4g: 4 replicas; a3-megagpu-8g: set `replicas: 8`):
 
    ```bash
-   kubectl -n ip-bench create configmap tracelab-trace --from-file=tracelab_small.jsonl=<trace.jsonl>
+   kubectl create namespace llm-d-bench
+   kubectl -n llm-d-bench create secret generic llm-d-hf-token --from-literal=HF_TOKEN=<token or empty>
+   kubectl -n llm-d-bench apply -k llm-d/
+   ```
+
+   Put the Gateway address in `server.base_url` of `inference-perf-job.yaml`.
+
+4. **Trace and benchmark.** Export whole TraceLab sessions (do not cut sessions
+   short; the config's `filter` skips sessions that do not fit the model), put
+   them in a ConfigMap, build the image with the `otel` dependency group (it
+   brings `grpcio`), and run the Job:
+
+   ```bash
+   kubectl -n ip-bench create configmap tracelab-trace --from-file=tracelab.jsonl=<trace.jsonl>
    sed "s#image: IMAGE#image: <your image>#" inference-perf-job.yaml | kubectl apply -f -
    ```
 
    The Job keeps its pod after the run so the reports can be copied out:
    `kubectl -n ip-bench exec <pod> -- tar cf - -C /reports/run . | tar xf -`.
-   Deleting the pod mid-run skips the tool executor's teardown; delete any
-   leftover `ip-*` actors with `kubectl ate delete actor`.
+   Deleting the pod mid-run skips the sandbox teardown; delete any leftover
+   `ip-*` actors with `kubectl ate delete actor`.

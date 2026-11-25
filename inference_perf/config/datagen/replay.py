@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Union, cast
 from pydantic import BaseModel, Field, model_validator
 
 from inference_perf.config.common import Distribution, DistributionType, StrictBaseModel
-from inference_perf.config.datagen.toolexec import ToolExecutorConfig
 
 # Sentinel for "do not clamp inter-event waits". The replay runtime clamps with
 # ``min(event.wait_ms, max_wait_ms)``, so disabling a cap means raising that
@@ -190,15 +189,6 @@ class SessionReplayConfig(StrictBaseModel):
     # Error handling
     include_errors: bool = Field(True, description="Include spans with error status")
     skip_invalid_files: bool = Field(False, description="Skip invalid trace files instead of failing")
-
-    # Tool execution on an agent runtime. None (default) keeps the plain sleep.
-    tool_executor: Optional[ToolExecutorConfig] = Field(
-        None,
-        description=(
-            "Execute replayed tool gaps on agent sandbox actors (GKE Agent Substrate) instead of sleeping, and "
-            "record actor wake, tool execution and wake-to-first-token metrics. Unset keeps the plain sleep."
-        ),
-    )
 
     # Client-side mitigation for server-side tool-call parser bugs (e.g.
     # vLLM's `qwen3_xml` leaking closing XML markers into the JSON `arguments`

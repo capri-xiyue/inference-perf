@@ -12,52 +12,50 @@ data:
     load:
       type: trace_session_replay
       stages:
-        - concurrent_sessions: 4
-          num_sessions: 10
+        - concurrent_sessions: 12
+          num_sessions: 24
       num_workers: 2
       worker_max_concurrency: 100
-      request_timeout: 600
-      stage_teardown_grace_seconds: 60
+      request_timeout: 900
+      stage_teardown_grace_seconds: 120
     api:
       type: chat
       streaming: true
     server:
       type: vllm
-      model_name: Qwen/Qwen3-0.6B
-      base_url: http://vllm.llm.svc.cluster.local:8000
+      model_name: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+      base_url: http://GATEWAY_ADDRESS        # llm-d inference gateway
       ignore_eos: true
     tokenizer:
-      pretrained_model_name_or_path: Qwen/Qwen3-0.6B
+      pretrained_model_name_or_path: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
     data:
       type: tracelab_trace_replay
       tracelab_trace_replay:
-        trace_files: ["/data/tracelab_small.jsonl"]
+        trace_files: ["/data/tracelab.jsonl"]
         use_static_model: true
-        static_model_name: Qwen/Qwen3-0.6B
-        trace_idle_gap_cap_seconds: 20
-        tool_executor:
-          type: substrate
-          idle_gap_threshold_ms: 5000
-          actor:
-            name_prefix: ip
-            suspend:
-              between_turns: true
-              after_each_tool_call: false
-              snapshot_durability: async
-            tool_call:
-              command_template: "sleep {duration_sec:.3f}"
-          substrate:
-            atespace: ip-bench
-            actor_template: python-runtime
-            api:
-              endpoint: api.ate-system.svc:443
-              server_name: api.ate-system.svc
-              ca_path: /run/ate/ca.crt
-              cert_bundle_path: /run/ate/credential-bundle.pem
-            router:
-              url: https://atenet-router.ate-system.svc
-              ca_path: /run/ate/ca.crt
-              cert_bundle_path: /run/ate/credential-bundle.pem
+        static_model_name: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+        filter: "lambda x: x['max_tokens'] < 262144"   # skip sessions that do not fit the model
+        trace_idle_gap_cap_seconds: null               # replay every gap as recorded
+    sandbox:
+      type: substrate
+      actor:
+        name_prefix: ip
+        suspend:
+          between_turns: true
+          after_each_tool_call: false
+          snapshot_durability: async
+      substrate:
+        atespace: ip-bench
+        actor_template: python-runtime
+        api:
+          endpoint: api.ate-system.svc:443
+          server_name: api.ate-system.svc
+          ca_path: /run/ate/ca.crt
+          cert_bundle_path: /run/ate/credential-bundle.pem
+        router:
+          url: https://atenet-router.ate-system.svc
+          ca_path: /run/ate/ca.crt
+          cert_bundle_path: /run/ate/credential-bundle.pem
     report:
       request_lifecycle:
         summary: true

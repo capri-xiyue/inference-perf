@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, SerializeAsAny, SerializerFunctionWrapHan
 from inference_perf.payloads import Audios, Images, RequestBody, RequestMetrics, Videos
 from inference_perf.utils.custom_tokenizer import CustomTokenizer
 from inference_perf.config import APIConfig, APIType
-from inference_perf.apis.agent_gap import AgentGapMetrics, AgentTurnMetric
+from inference_perf.apis.agent_gap import AgentGapMetrics, AgentTurnMetric, SessionSandboxMetrics
 
 
 # Undecorated so mutation testing reaches it: mutmut skips the body of the
@@ -90,9 +90,9 @@ class InferenceInfo(BaseModel):
     # retry happened, so RequestLifecycleMetric.start_time stays the single definition
     # of when the request was dispatched.
     retry_wasted_sec: Optional[float] = None
-    # The replay gap that preceded this request when a tool executor ran it (see
-    # SessionReplayConfig.tool_executor). None, and omitted from the serialized
-    # info, for every request of a run without a tool executor.
+    # The replay gap that preceded this request when a sandbox ran it (see
+    # Config.sandbox). None, and omitted from the serialized info, for every
+    # request of a run without a sandbox.
     agent_gap: Optional[AgentGapMetrics] = None
 
     @model_serializer(mode="wrap")
@@ -233,9 +233,12 @@ class SessionLifecycleMetric(BaseModel):
     num_structured_output_excluded: Optional[int] = None
     tfut_sec: Optional[float] = None
     tfut_none_reason: Optional[str] = None
-    # Agent turns reconstructed from the per-request agent_gap records (tool
-    # executor runs only). None, and omitted from the serialized session, otherwise.
+    # Agent turns and sandbox activity reconstructed from the per-request agent_gap
+    # records (sandbox runs only). None, and omitted from the serialized session, otherwise.
     agent_turns: Optional[List[AgentTurnMetric]] = None
+    sandbox: Optional[SessionSandboxMetrics] = None
+    # The session's agent_gap records, kept for the run summary; never serialized.
+    agent_gaps: Optional[List[AgentGapMetrics]] = Field(default=None, exclude=True)
     dispatch_perf_counter: Optional[float] = Field(default=None, exclude=True)
 
     @model_serializer(mode="wrap")
@@ -246,8 +249,9 @@ class SessionLifecycleMetric(BaseModel):
         pair of zeros on every session of a run that hit no transport faults.
         """
         dumped: dict[str, Any] = handler(self)
-        if dumped.get("agent_turns") is None:
-            dumped.pop("agent_turns", None)
+        for key in ("agent_turns", "sandbox"):
+            if dumped.get(key) is None:
+                dumped.pop(key, None)
         if not dumped.get("retries_attempted"):
             dumped.pop("retries_attempted", None)
             dumped.pop("retries_recovered", None)
@@ -266,7 +270,7 @@ class InferenceAPIData(BaseModel):
     stage_id: int = 0  # stage id
     headers: Optional[dict[str, str]] = None
     labels: dict[str, str] = {}
-    # Set by session replay when a tool executor ran the gap before this request.
+    # Set by session replay when a sandbox ran the gap before this request.
     agent_gap: Optional[AgentGapMetrics] = None
 
     @abstractmethod

@@ -11,13 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Configuration for executing replayed tool gaps on an agent sandbox runtime.
+"""Configuration of the sandbox that executes replayed tool calls.
 
-During session replay, the gap between a predecessor's completion and an event's
-dispatch stands for tool execution or user think time. By default that gap is a
-plain sleep. A ``tool_executor`` config replaces the sleep with real work on an
-agent runtime (GKE Agent Substrate actors), so the benchmark also measures actor
-wake, tool execution and wake-to-first-token latency.
+``server`` is the LLM under test; ``sandbox`` is the tool-execution side under
+test. When set, TraceLab replay runs each recorded tool call in a sandbox actor
+(GKE Agent Substrate) instead of sleeping through the gap, and reports turn
+latency plus the sandbox's own overheads (actor wake, suspend, tool dispatch).
 """
 
 import fnmatch
@@ -29,7 +28,7 @@ from pydantic import Field, model_validator
 from inference_perf.config.common import StrictBaseModel
 
 
-class ToolExecutorType(str, Enum):
+class SandboxType(str, Enum):
     # Real GKE Agent Substrate: ateapi gRPC control plane + atenet-router data plane.
     SUBSTRATE = "substrate"
     # In-process stand-in with configurable latencies; no cluster required.
@@ -37,22 +36,20 @@ class ToolExecutorType(str, Enum):
 
 
 # Call attributes that identify the agent issuing an LLM call (OTel GenAI semantic
-# conventions). OTel traces carry them on their spans; weka trace replay sets them
-# on subagent calls (name = subagent_type, id = agent_id).
+# conventions). Actor assignment rules give a matching agent a dedicated actor.
 AGENT_ID_ATTRIBUTE = "gen_ai.agent.id"
 AGENT_NAME_ATTRIBUTE = "gen_ai.agent.name"
 
-# Call attributes that describe the gap before an LLM call, when the trace records
-# it (e.g. TraceLab timing_events). GAP_KIND_ATTRIBUTE is "tool" or "idle" and takes
-# precedence over gap-length heuristics; the tool attributes are reported.
+# Call attributes the trace replay sets for the sandbox, describing the gap before
+# the call: its kind ("tool" or "idle") and the tool calls to execute in it, as a
+# list of {"name", "start_sec", "duration_sec"} relative to the gap start (the
+# previous LLM call's end).
 GAP_KIND_ATTRIBUTE = "agent.gap.kind"
-TOOL_NAME_ATTRIBUTE = "gen_ai.tool.name"
-TOOL_LATENCY_ATTRIBUTE = "agent.tool.latency_ms"
+GAP_TOOLS_ATTRIBUTE = "agent.gap.tools"
 
 
 class ActorAssignment(str, Enum):
-    # Run the gap on the session's shared actor (Claude Code style: subagents share
-    # their parent's machine).
+    # Run the gap on the session's shared actor (subagents share their parent's machine).
     SESSION = "session"
     # Run the gap on an actor of its own, one per agent instance (gen_ai.agent.id,
     # else gen_ai.agent.name). Calls with neither fall back to the session actor.
@@ -101,7 +98,7 @@ class ActorSuspendConfig(StrictBaseModel):
     )
     after_each_tool_call: bool = Field(
         False,
-        description="Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor.",
+        description="Suspend after every tool gap, while the next LLM call runs; the next tool gap wakes the actor.",
     )
     snapshot_durability: SnapshotDurability = Field(
         SnapshotDurability.ASYNC, description="When SuspendActor returns relative to its snapshot reaching durable storage."
@@ -109,21 +106,9 @@ class ActorSuspendConfig(StrictBaseModel):
 
 
 class ActorToolCallConfig(StrictBaseModel):
-    """What runs in the actor for a tool gap."""
+    """How a replayed tool call runs in the actor (always ``sleep <recorded duration>``)."""
 
-    command_template: str = Field(
-        "sleep {duration_sec:.3f}",
-        description="Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length.",
-    )
     timeout_sec: float = Field(300.0, gt=0, description="Timeout for one tool execution.")
-
-    @model_validator(mode="after")
-    def validate_command_template(self) -> "ActorToolCallConfig":
-        try:
-            self.command_template.format(duration_sec=0.0)
-        except (KeyError, IndexError, ValueError) as e:
-            raise ValueError(f"invalid command_template: {e}") from e
-        return self
 
 
 class ActorConfig(StrictBaseModel):
@@ -133,28 +118,36 @@ class ActorConfig(StrictBaseModel):
     assignment: ActorAssignmentConfig = Field(
         default_factory=ActorAssignmentConfig,
         description=(
-            "Which actor runs each gap. By default every call, subagents included, uses the session's shared "
-            "actor; rules give selected agents a dedicated actor."
+            "Which actor runs each gap. By default every call uses the session's shared actor; rules give "
+            "selected agents a dedicated actor."
         ),
     )
     suspend: ActorSuspendConfig = Field(default_factory=ActorSuspendConfig, description="When and how actors are suspended.")
     tool_call: ActorToolCallConfig = Field(
-        default_factory=ActorToolCallConfig, description="What runs in the actor for a tool gap."
+        default_factory=ActorToolCallConfig, description="How a replayed tool call runs in the actor."
     )
     delete_on_session_end: bool = Field(True, description="Delete a session's actors once it drains.")
 
 
 class FakeSubstrateConfig(StrictBaseModel):
-    """Latency model for the in-process fake Substrate backend."""
+    """Latency model for the in-process fake Substrate backend.
 
-    create_latency_ms: float = Field(20.0, ge=0, description="Latency of CreateActor.")
+    Defaults are rounded from a real Substrate v1.0.0 run (gVisor on c3-standard-4 workers).
+    """
+
+    create_latency_ms: float = Field(25.0, ge=0, description="Latency of CreateActor.")
     cold_resume_latency_ms: float = Field(
-        1000.0, ge=0, description="Latency of the first resume of an actor, restored from the template's golden snapshot."
+        200.0, ge=0, description="Latency of the first resume of an actor, restored from the template's golden snapshot."
     )
-    warm_resume_latency_ms: float = Field(400.0, ge=0, description="Latency of later resumes from the actor's own snapshot.")
-    suspend_latency_ms: float = Field(200.0, ge=0, description="Latency of SuspendActor.")
+    warm_resume_latency_ms: float = Field(140.0, ge=0, description="Latency of later resumes from the actor's own snapshot.")
+    snapshot_capture_latency_ms: float = Field(
+        85.0, ge=0, description="SuspendActor time to capture the snapshot on the node; all an async suspend waits for."
+    )
+    snapshot_upload_latency_ms: float = Field(
+        350.0, ge=0, description="Extra SuspendActor time to upload the snapshot to durable storage; paid only by sync."
+    )
     delete_latency_ms: float = Field(10.0, ge=0, description="Latency of DeleteActor.")
-    exec_overhead_ms: float = Field(5.0, ge=0, description="Router and sandbox overhead added to every tool execution.")
+    exec_overhead_ms: float = Field(25.0, ge=0, description="Router and sandbox overhead added to every tool execution.")
     jitter_fraction: float = Field(0.2, ge=0, le=1, description="Uniform +/- jitter applied to every simulated latency.")
 
 
@@ -197,24 +190,16 @@ class SubstrateConfig(StrictBaseModel):
     request_timeout_sec: float = Field(120.0, gt=0, description="Timeout for a single control or data plane call.")
 
 
-class ToolExecutorConfig(StrictBaseModel):
-    """Run replayed tool gaps on agent sandbox actors instead of sleeping."""
+class SandboxConfig(StrictBaseModel):
+    """The sandbox that executes replayed tool calls (supported with tracelab_trace_replay)."""
 
-    type: ToolExecutorType = Field(ToolExecutorType.FAKE_SUBSTRATE, description="Tool executor backend.")
-    idle_gap_threshold_ms: int = Field(
-        5000,
-        ge=0,
-        description=(
-            "A gap at least this long, with no recorded gap kind or role:tool message to classify it, is treated as "
-            "user idle time (a new turn). Shorter non-zero gaps are tool calls."
-        ),
-    )
+    type: SandboxType = Field(SandboxType.FAKE_SUBSTRATE, description="Sandbox backend.")
     actor: ActorConfig = Field(default_factory=ActorConfig, description="Backend-independent actor behavior.")
     substrate: Optional[SubstrateConfig] = Field(None, description="Substrate settings (required for type=substrate).")
     fake: FakeSubstrateConfig = Field(default_factory=FakeSubstrateConfig, description="Fake backend latency model.")
 
     @model_validator(mode="after")
-    def validate_backend(self) -> "ToolExecutorConfig":
-        if self.type == ToolExecutorType.SUBSTRATE and self.substrate is None:
-            raise ValueError("tool_executor.substrate is required when tool_executor.type is 'substrate'")
+    def validate_backend(self) -> "SandboxConfig":
+        if self.type == SandboxType.SUBSTRATE and self.substrate is None:
+            raise ValueError("sandbox.substrate is required when sandbox.type is 'substrate'")
         return self

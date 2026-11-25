@@ -35,6 +35,7 @@ from inference_perf.config.metrics import MetricsClientConfig
 from inference_perf.config.observability import ObservabilityConfig
 from inference_perf.config.redaction import REDACTED, redact, redacted_credentials
 from inference_perf.config.reportgen import ReportConfig
+from inference_perf.config.sandbox import SandboxConfig
 from inference_perf.config.utils import CustomTokenizerConfig
 
 # Generators that replay their corpus for a duration-bounded stage instead of ending when
@@ -143,6 +144,13 @@ class Config(StrictBaseModel):
         default=ObservabilityConfig(),
         description="Runtime observability of the benchmark run itself: the metrics inference-perf exports.",
     )
+    sandbox: Optional[SandboxConfig] = Field(
+        default=None,
+        description=(
+            "Sandbox under test that executes replayed tool calls (GKE Agent Substrate actors) instead of sleeping "
+            "through the recorded gaps. Supported with tracelab_trace_replay. Unset keeps the plain sleep."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -164,6 +172,16 @@ class Config(StrictBaseModel):
         if isinstance(data, dict):
             return _default_conversation_replay_concurrency(data)
         return data
+
+    @model_validator(mode="after")
+    def validate_sandbox_data_type(self) -> "Config":
+        """The sandbox replays per-tool timings, which only TraceLab traces record."""
+        if self.sandbox is not None and self.data.type != DataGenType.TraceLabTraceReplay:
+            raise ValueError(
+                f"sandbox requires data.type 'tracelab_trace_replay' (it replays each recorded tool call), "
+                f"but got '{self.data.type.value}'"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_trace_replay_load_type(self) -> "Config":

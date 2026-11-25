@@ -473,7 +473,13 @@ def main_cli() -> None:
             )
         elif config.data.type == DataGenType.TraceLabTraceReplay:
             datagen = TraceLabTraceReplayDataGenerator(
-                config.api, config.data, tokenizer, mp_manager, config.load.base_seed, num_workers=config.load.num_workers
+                config.api,
+                config.data,
+                tokenizer,
+                mp_manager,
+                config.load.base_seed,
+                num_workers=config.load.num_workers,
+                sandbox=config.sandbox,
             )
         elif config.data.type == DataGenType.SyntheticAgentic:
             datagen = SyntheticAgenticDataGenerator(

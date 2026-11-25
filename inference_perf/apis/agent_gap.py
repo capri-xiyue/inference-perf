@@ -11,7 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Per-request record of the replay gap that preceded a request.
+"""Records of the sandbox's work during session replay.
+
+``AgentGapMetrics`` describes the gap that preceded one request, ``AgentTurnMetric``
+one agent turn and ``SessionSandboxMetrics`` one session's sandbox activity.
 
 All timestamps are ``time.perf_counter()`` values, the same monotonic clock as
 ``RequestLifecycleMetric.start_time`` and streamed token times, so they can be
@@ -25,20 +28,38 @@ from pydantic import BaseModel
 
 
 class GapKind(str, Enum):
-    # No gap work (zero-length gap between dependent calls).
+    # No gap work (an unclassified, zero-length gap between dependent calls).
     NONE = "none"
-    # A tool call: the gap is executed in the actor.
+    # Tool calls: each recorded tool runs in the actor.
     TOOL = "tool"
-    # User idle / think time: the actor may be suspended, then woken. Starts a turn.
+    # User idle time: the actor may be suspended, then woken. Starts a turn.
     IDLE = "idle"
 
 
+class ToolCallMetrics(BaseModel):
+    """One replayed tool call, executed in the actor as ``sleep duration_sec``."""
+
+    name: str
+    # Planned start, relative to the gap start (the previous LLM call's end).
+    start_sec: float
+    # Part of the recorded tool window that falls after the previous LLM call ended.
+    duration_sec: float
+    # Round trip of the execution through the router, including the in-actor sleep.
+    tool_exec_sec: Optional[float] = None
+    # tool_exec_sec - duration_sec: router and sandbox overhead.
+    tool_exec_overhead_sec: Optional[float] = None
+    exit_code: Optional[int] = None
+    error: Optional[str] = None
+
+
 class AgentGapMetrics(BaseModel):
+    # Turn of the session this request belongs to (0-based); an idle gap starts the next one.
+    turn_index: int = 0
     gap_kind: GapKind
     executor: str
-    # Recorded (capped) gap length from the trace.
+    # Recorded gap length from the trace (after the replay cap, if any).
     trace_wait_sec: float
-    # When the gap began (predecessors done) and when the request became ready to send.
+    # When the gap began (the previous LLM call ended) and when the request became ready to send.
     gap_start: float
     gap_end: Optional[float] = None
     actor: Optional[str] = None
@@ -46,51 +67,47 @@ class AgentGapMetrics(BaseModel):
     actor_create_sec: Optional[float] = None
     # SuspendActor latency, set when this gap suspended the actor.
     suspend_sec: Optional[float] = None
-    # Wake: when it was triggered and how long until the actor served.
-    wake_start: Optional[float] = None
-    wake_sec: Optional[float] = None
-    # True if the actor was actually restored; False if it was already running.
-    resumed: Optional[bool] = None
-    # Whether this wake restored from the template's golden snapshot (first resume).
+    # When the gap needed the actor (end of the idle time, or start of the tools).
+    actor_ready_start: Optional[float] = None
+    # From actor_ready_start until the actor serves: waiting out a background suspend
+    # still in flight plus ResumeActor. None when the actor was already running.
+    actor_ready_sec: Optional[float] = None
+    # Whether the wake restored from the template's golden snapshot (first resume). None without a wake.
     cold: Optional[bool] = None
-    tool_exec_sec: Optional[float] = None
-    tool_exit_code: Optional[int] = None
-    # Tools the trace recorded for this gap (comma-separated), when known.
-    tool_names: Optional[str] = None
+    tools: List[ToolCallMetrics] = []
     error: Optional[str] = None
 
 
 class AgentTurnMetric(BaseModel):
-    """One agent turn: from the wake that starts it to the end of its last LLM call.
+    """One agent turn: from the moment it needs the actor to the end of its last LLM call.
 
     A turn starts at the session's first request or at an idle gap and runs until
-    the next idle gap. Latencies follow "Measuring Agent Sessions":
-    Lturn = Lwake + sum(LTTTC_i + Ltool_exec_i), alpha_inf = sum(LTTTC_i) / Lturn.
+    the next idle gap.
     """
 
     turn_index: int
-    # First turn of the session: the actor wakes from the template's golden snapshot.
+    # The session's first turn: the actor wakes from the template's golden snapshot.
     cold: bool
-    first_event_id: Optional[str] = None
-    # Turn start: when the wake was triggered (or the first request's gap began).
-    start_time: float
-    end_time: float
     turn_latency_sec: float
-    wake_sec: Optional[float] = None
-    resumed: Optional[bool] = None
-    # Lwake-TTFT, measured: first output token of the turn's first LLM call minus start_time.
-    wake_to_first_token_sec: Optional[float] = None
-    # Client-side time between the actor serving and the LLM request being sent.
-    harness_sec: Optional[float] = None
-    # TTFT of the turn's first LLM call alone (engine + gateway).
-    first_call_ttft_sec: Optional[float] = None
-    num_llm_calls: int
-    num_tool_calls: int
-    # Serial sums; with parallel subagents they can exceed turn_latency_sec.
-    sum_llm_latency_sec: float
-    sum_tool_exec_sec: float
-    sum_tool_wake_sec: float
-    alpha_inf: Optional[float] = None
-    tool_exec_sec: List[float] = []
-    tool_wake_sec: List[float] = []
     success: bool
+
+
+class ActorReadySummary(BaseModel):
+    cold: Optional[float] = None
+    warm_mean: Optional[float] = None
+    warm_max: Optional[float] = None
+
+
+class SessionSandboxMetrics(BaseModel):
+    """One session's sandbox activity, as counts and simple aggregates."""
+
+    actors: List[str]
+    actor_create_sec: Optional[float] = None
+    num_wakes: int
+    actor_ready_sec: ActorReadySummary
+    num_suspends: int
+    suspend_sec_mean: Optional[float] = None
+    num_tool_calls: int
+    tool_exec_overhead_sec_mean: Optional[float] = None
+    tool_exec_overhead_sec_max: Optional[float] = None
+    num_tool_errors: int

@@ -63,7 +63,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 from pydantic import BaseModel, Field
 
 from inference_perf.config import APIConfig, DataConfig, TraceLabTraceReplayConfig
-from inference_perf.config.datagen.toolexec import GAP_KIND_ATTRIBUTE, TOOL_LATENCY_ATTRIBUTE, TOOL_NAME_ATTRIBUTE
+from inference_perf.config.sandbox import GAP_KIND_ATTRIBUTE, GAP_TOOLS_ATTRIBUTE, SandboxConfig
 from inference_perf.datagen.replay.otel_trace_to_replay_graph import (
     DEPENDENCY_TYPE,
     RawCall,
@@ -230,11 +230,14 @@ class TraceLabTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
         mp_manager: Optional[SyncManager] = None,
         base_seed: Optional[int] = None,
         num_workers: int = 1,
+        sandbox: Optional[SandboxConfig] = None,
     ) -> None:
         if not hasattr(config, "tracelab_trace_replay") or config.tracelab_trace_replay is None:
             raise ValueError("tracelab_trace_replay configuration is required for TraceLabTraceReplayDataGenerator")
 
         self.tracelab_config = config.tracelab_trace_replay
+        # Set before the base class builds sessions: gap attributes are only attached for a sandbox.
+        self.sandbox_config: Optional[SandboxConfig] = sandbox
 
         super().__init__(
             api_config,
@@ -778,28 +781,56 @@ class TraceLabTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
         return max(int(merged_ms + serial_ms), 0)
 
     @staticmethod
-    def _gap_attributes(prev: TraceLabRound, curr: TraceLabRound, gap_ms: int) -> Dict[str, object]:
-        """Describe the gap before ``curr`` for tool executors (see config.datagen.toolexec).
+    def _gap_tools(prev: TraceLabRound) -> List[Dict[str, object]]:
+        """The tool calls ``prev`` emitted, timed relative to its completion.
 
-        The round was submitted by its last input event: ``tool_result`` means the
-        gap was tool execution, ``user_message`` means the user was typing. Without
-        timing events, tool calls emitted by ``prev`` still mark a tool gap. The
-        tools that ran are the ones ``prev`` emitted.
+        The gap before the next round starts when ``prev`` completes (its last
+        model-output event). The replay runs a tool only after the LLM call has
+        finished, so each tool covers the part of its recorded window that falls
+        after that point: it starts at ``max(emitted_at, prev_end)`` and ends at
+        ``result_at``. A tool that finished while the response was still being
+        generated gets zero duration (it still costs one dispatch). Every result
+        therefore lands when the trace recorded it. Tools without timestamps start
+        at the gap start and run for their recorded latency.
         """
-        attributes: Dict[str, object] = {}
+        _, prev_end = _round_time_bounds(prev)
+        tools: List[Dict[str, object]] = []
+        for t in prev.tools or []:
+            emitted = _parse_ts(t.emitted_at)
+            result = _parse_ts(t.result_at)
+            if prev_end is not None and emitted is not None and result is not None and result >= emitted:
+                start = max(emitted - prev_end, 0.0)
+                duration = max(result - prev_end - start, 0.0)
+            else:
+                latency_ms = t.tool_wall_latency_ms if t.tool_wall_latency_ms is not None else t.tool_internal_latency_ms
+                start = 0.0
+                duration = max(float(latency_ms or 0.0), 0.0) / 1000.0
+            tools.append({"name": t.tool_name or "unknown", "start_sec": start, "duration_sec": duration})
+        return tools
+
+    @classmethod
+    def _gap_attributes(cls, prev: TraceLabRound, curr: TraceLabRound) -> Dict[str, object]:
+        """Describe the gap before ``curr`` for the sandbox (see config.sandbox).
+
+        ``curr`` was submitted by its last input event: ``tool_result`` means the
+        gap was tool execution, ``user_message`` means the user was idle (a new
+        turn). Without input events, tool calls emitted by ``prev`` still mark a
+        tool gap; otherwise the gap is left unclassified (the recorded wait, which
+        is then zero, is replayed as is).
+        """
         inputs = [
             (_parse_ts(e.timestamp), e.event_type) for e in curr.timing_events or [] if e.event_type in INPUT_EVENT_TYPES
         ]
         timed = [(stamp, kind) for stamp, kind in inputs if stamp is not None]
         if timed:
-            last_input = max(timed, key=lambda item: item[0])[1]
-            attributes[GAP_KIND_ATTRIBUTE] = "tool" if last_input == "tool_result" else "idle"
+            kind = "tool" if max(timed, key=lambda item: item[0])[1] == "tool_result" else "idle"
         elif prev.tools:
-            attributes[GAP_KIND_ATTRIBUTE] = "tool"
-        names = [t.tool_name for t in prev.tools or [] if t.tool_name]
-        if names and attributes.get(GAP_KIND_ATTRIBUTE) == "tool":
-            attributes[TOOL_NAME_ATTRIBUTE] = ",".join(names)
-            attributes[TOOL_LATENCY_ATTRIBUTE] = gap_ms
+            kind = "tool"
+        else:
+            return {}
+        attributes: Dict[str, object] = {GAP_KIND_ATTRIBUTE: kind}
+        if kind == "tool":
+            attributes[GAP_TOOLS_ATTRIBUTE] = cls._gap_tools(prev)
         return attributes
 
     def _reconstruct_raw_calls(self, session_id: str, rounds: List[TraceLabRound]) -> List[RawCall]:
@@ -828,7 +859,8 @@ class TraceLabTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
                 if gap is None:
                     gap = self._tool_latency_ms(rounds[i - 1])
                 t_ms += gap if cap_ms is None else min(gap, cap_ms)
-                gap_attributes = self._gap_attributes(rounds[i - 1], rnd, self._tool_latency_ms(rounds[i - 1]))
+                if self.sandbox_config is not None:
+                    gap_attributes = self._gap_attributes(rounds[i - 1], rnd)
 
             prompt_text, prompt_ids, shared = self._build_prompt(
                 session_id=session_id,

@@ -34,8 +34,8 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import aiohttp
 from google.protobuf.message import Message
 
-from inference_perf.config.datagen.toolexec import SubstrateConfig
-from inference_perf.toolexec.substrate_executor import ExecResult, SubstrateBackend
+from inference_perf.config.sandbox import SubstrateConfig
+from inference_perf.sandbox.substrate_executor import ExecResult, SubstrateBackend
 
 if TYPE_CHECKING:
     import grpc.aio
@@ -106,7 +106,7 @@ def build_ateapi_messages() -> Dict[str, type[Message]]:
     from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
     fdp = descriptor_pb2.FileDescriptorProto(
-        name="inference_perf/toolexec/ateapi_v1_subset.proto", package=_PACKAGE, syntax="proto3"
+        name="inference_perf/sandbox/ateapi_v1_subset.proto", package=_PACKAGE, syntax="proto3"
     )
     for enum_name, values in _ENUMS:
         enum = fdp.enum_type.add(name=enum_name)

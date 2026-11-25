@@ -1,0 +1,10 @@
+# llm-d optimized-baseline vLLM model server (GKE), adapted for the sandbox
+# benchmark: Qwen3-30B-A3B-Instruct-2507 (FP8) with TP1 per H100 and its native
+# 256K context, one replica per GPU. Serve it behind the llm-d router in Gateway
+# mode (see README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/llm-d/llm-d//guides/optimized-baseline/modelserver/gpu/vllm/gke?ref=main
+patches:
+  - path: patch-qwen3-30b-h100.yaml

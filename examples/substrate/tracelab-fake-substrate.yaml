@@ -1,0 +1,52 @@
+# TraceLab replay with every recorded tool call executed on an in-process fake of
+# GKE Agent Substrate. Exercises the actor lifecycle and the turn / sandbox
+# metrics without a cluster; point server.base_url at any OpenAI-compatible
+# server (for example llm-d-inference-sim). See docs/sandbox.md.
+load:
+  type: trace_session_replay
+  stages:
+    - concurrent_sessions: 4
+      num_sessions: 8
+  num_workers: 2
+  worker_max_concurrency: 100
+  request_timeout: 300
+api:
+  type: chat
+  streaming: true
+server:
+  type: vllm
+  model_name: HuggingFaceTB/SmolLM2-135M-Instruct
+  base_url: http://localhost:8000
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: HuggingFaceTB/SmolLM2-135M-Instruct
+data:
+  type: tracelab_trace_replay
+  tracelab_trace_replay:
+    hf_dataset_path: UW-SyFI/TraceLab
+    num_dataset_entries: 8
+    use_static_model: true
+    static_model_name: HuggingFaceTB/SmolLM2-135M-Instruct
+    filter: "lambda x: x['max_tokens'] < 8192"
+    trace_idle_gap_cap_seconds: null
+sandbox:
+  type: fake_substrate
+  actor:
+    suspend:
+      between_turns: true
+      after_each_tool_call: false
+      snapshot_durability: async   # sync also pays fake.snapshot_upload_latency_ms
+  fake: {}                         # defaults are rounded from a real Substrate run
+report:
+  request_lifecycle:
+    summary: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      response_chunks: false
+      info: true
+      computed_metrics: true
+  session_lifecycle:
+    summary: true
+    per_session: true

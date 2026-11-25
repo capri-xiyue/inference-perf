@@ -65,15 +65,16 @@ from inference_perf.payloads import Image, Images, RequestMetrics, Text
 from inference_perf.apis.streaming_parser import parse_sse_stream
 from inference_perf.config import APIConfig, APIType, DataConfig, SessionReplayConfig
 from inference_perf.config.datagen.replay import BadToolCallHandling, ToolChoiceMode
-from inference_perf.config.datagen.toolexec import GAP_KIND_ATTRIBUTE, TOOL_NAME_ATTRIBUTE, ToolExecutorConfig
+from inference_perf.config.sandbox import GAP_KIND_ATTRIBUTE, GAP_TOOLS_ATTRIBUTE, SandboxConfig
 from inference_perf.datagen.base import LazyLoadDataMixin, SessionGenerator
 from inference_perf.datagen.replay.replay_graph_types import InputSegment, ReplayGraph
-from inference_perf.toolexec import (
+from inference_perf.sandbox import (
     GapContext,
     ToolExecutionError,
     ToolExecutor,
     build_tool_executor,
     classify_gap,
+    parse_planned_tools,
     resolve_actor_key,
 )
 from inference_perf.utils.custom_tokenizer import CustomTokenizer
@@ -490,8 +491,8 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
     # output; the recorded assistant messages are sent as-is. Predecessor wait
     # timing is still enforced.
     disable_output_substitution: bool = False
-    # The graph call's attributes (e.g. gen_ai.agent.name); select the actor that runs
-    # this event's gap when a tool executor is configured.
+    # The graph call's attributes (gap kind, recorded tools, agent identity); describe
+    # this event's gap to the sandbox when one is configured.
     call_attributes: Optional[Dict[str, object]] = None
     # Set by _build_messages_with_substitution when it calls record_failure
     # early (e.g. recorded fallback also malformed). Lets the caller pass the
@@ -726,7 +727,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             logger.debug(f"Event {self.event_id} substitution/injection complete, {len(self.messages)} messages")
 
     async def _run_gap_with_tool_executor(self, session_id: str) -> bool:
-        """Run this event's gap on the tool executor instead of sleeping.
+        """Run this event's gap on the sandbox instead of sleeping.
 
         Records the gap on self.agent_gap. Returns False when the gap failed, after
         failing this event and its session.
@@ -737,9 +738,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
         assert executor is not None and executor_config is not None
         attributes = self.call_attributes or {}
         actor_key = resolve_actor_key(executor_config.actor.assignment, session_id, attributes)
-        last_role = self.original_messages[-1].get("role") if self.original_messages else None
         recorded_kind = attributes.get(GAP_KIND_ATTRIBUTE)
-        tool_names = attributes.get(TOOL_NAME_ATTRIBUTE)
         ctx = GapContext(
             session_id=session_id,
             actor_key=actor_key,
@@ -747,12 +746,9 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             wait_sec=self.wait_ms / 1000.0,
             gap_kind=classify_gap(
                 has_predecessors=bool(self.predecessor_event_ids),
-                wait_ms=self.wait_ms,
-                last_message_role=last_role if isinstance(last_role, str) else None,
-                idle_gap_threshold_ms=executor_config.idle_gap_threshold_ms,
                 recorded_kind=recorded_kind if isinstance(recorded_kind, str) else None,
             ),
-            tool_names=tool_names if isinstance(tool_names, str) else None,
+            tools=parse_planned_tools(attributes.get(GAP_TOOLS_ATTRIBUTE)),
         )
         logger.debug(f"Event {self.event_id} running {ctx.gap_kind.value} gap ({ctx.wait_sec:.3f}s) on {executor.name}")
         try:
@@ -1580,10 +1576,10 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
         state["_tool_executor"] = None
         return state
 
-    def get_tool_executor_config(self) -> Optional[ToolExecutorConfig]:
-        replay_config = getattr(self, "replay_config", None)
-        config = getattr(replay_config, "tool_executor", None)
-        return config if isinstance(config, ToolExecutorConfig) else None
+    def get_tool_executor_config(self) -> Optional[SandboxConfig]:
+        """The sandbox config a subclass that supports it stores on ``sandbox_config``."""
+        config = getattr(self, "sandbox_config", None)
+        return config if isinstance(config, SandboxConfig) else None
 
     def has_tool_executor(self) -> bool:
         return self.get_tool_executor_config() is not None

@@ -21,13 +21,14 @@ import random
 import tarfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterator, List, Union
+from typing import Dict, Iterator, List, Optional, Union
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
 from inference_perf.config import APIConfig, APIType, CustomTokenizerConfig, DataConfig, DataGenType
+from inference_perf.config.sandbox import SandboxConfig, SandboxType
 from inference_perf.config.datagen.replay import UNCAPPED_WAIT_MS, TraceLabTraceReplayConfig
 from inference_perf.datagen.replay.otel_trace_to_replay_graph import (
     RawCall,
@@ -1384,19 +1385,21 @@ def test_tracelab_does_not_mutate_global_random_state(tmp_path: Path) -> None:
     assert [s.source_id for s in first.sessions if s is not None] == [s.source_id for s in second.sessions if s is not None]
 
 
-def test_tracelab_records_gap_kind_and_tools_for_tool_executors(tmp_path: Path) -> None:
-    """Each round carries what its preceding gap was, from the recorded input events.
+def _sandbox_gen(trace_files: List[str], sandbox: Optional[SandboxConfig]) -> TraceLabTraceReplayDataGenerator:
+    api_cfg = APIConfig(type=APIType.Chat, streaming=False)
+    data_cfg = DataConfig(type=DataGenType.TraceLabTraceReplay)
+    data_cfg.tracelab_trace_replay = TraceLabTraceReplayConfig(trace_files=trace_files)
+    return TraceLabTraceReplayDataGenerator(api_config=api_cfg, config=data_cfg, tokenizer=_mock_tokenizer(), sandbox=sandbox)
 
-    Round 1 is fed by tool_results of the two tools round 0 emitted (a tool gap,
-    timed by their merged wall time); round 2 is fed by a user_message (idle).
-    A round without timing events still marks a tool gap when the previous round
-    emitted tools, and an unexplained gap carries no kind at all.
-    """
+
+def _gap_rows() -> List[Dict[str, object]]:
     tools_r0 = [
-        {"tool_name": "Read", "emitted_at": _ts(2.0), "result_at": _ts(2.5)},
-        {"tool_name": "Bash", "emitted_at": _ts(2.5), "result_at": _ts(4.0)},
+        # Read finished while round 0 was still generating (before its end at 2.0).
+        {"tool_name": "Read", "emitted_at": _ts(1.5), "result_at": _ts(1.8)},
+        {"tool_name": "Grep", "emitted_at": _ts(1.6), "result_at": _ts(2.5)},
+        {"tool_name": "Bash", "emitted_at": _ts(2.0), "result_at": _ts(4.0)},
     ]
-    rows = [
+    return [
         _row("s", 0, 100, 10, tools=tools_r0, timing_events=_turn(0.0, 2.0)),
         _row(
             "s",
@@ -1404,6 +1407,7 @@ def test_tracelab_records_gap_kind_and_tools_for_tool_executors(tmp_path: Path) 
             120,
             10,
             timing_events=[
+                {"event_type": "tool_result", "timestamp": _ts(1.8)},
                 {"event_type": "tool_result", "timestamp": _ts(2.5)},
                 {"event_type": "tool_result", "timestamp": _ts(4.0)},
                 {"event_type": "text", "timestamp": _ts(5.0)},
@@ -1413,12 +1417,35 @@ def test_tracelab_records_gap_kind_and_tools_for_tool_executors(tmp_path: Path) 
         _row("s", 3, 160, 10),  # no timing events; round 2 emitted Edit
         _row("s", 4, 180, 10),  # no timing events, no tools before it
     ]
-    gen = _make_gen([str(_write_jsonl(tmp_path / "t.jsonl", rows))])
+
+
+def test_tracelab_describes_each_gap_for_the_sandbox(tmp_path: Path) -> None:
+    """Each round carries what its preceding gap was and the tools to replay in it.
+
+    Round 1 is fed by tool_results (a tool gap). Each tool covers the part of its
+    recorded window after round 0 ended (2.0s): Read finished before that and
+    gets zero duration, Grep runs 0.5s from the start, Bash 2.0s. Round 2 is fed
+    by a user_message (idle). A round without timing events is still a tool gap
+    when the previous round emitted tools (an untimed tool runs its recorded
+    latency); with neither, the gap is left unclassified.
+    """
+    sandbox = SandboxConfig(type=SandboxType.FAKE_SUBSTRATE)
+    gen = _sandbox_gen([str(_write_jsonl(tmp_path / "t.jsonl", _gap_rows()))], sandbox)
     session = next(s for s in gen.sessions if s is not None)
     events = sorted(session.graph.events.values(), key=lambda e: e.t_start_ms)
     attrs = [e.call.attributes or {} for e in events]
     assert attrs[0] == {}
-    assert attrs[1] == {"agent.gap.kind": "tool", "gen_ai.tool.name": "Read,Bash", "agent.tool.latency_ms": 2000}
+    assert attrs[1]["agent.gap.kind"] == "tool"
+    tools = attrs[1]["agent.gap.tools"]
+    assert [t["name"] for t in tools] == ["Read", "Grep", "Bash"]
+    assert [t["start_sec"] for t in tools] == pytest.approx([0.0, 0.0, 0.0])
+    assert [t["duration_sec"] for t in tools] == pytest.approx([0.0, 0.5, 2.0])
     assert attrs[2] == {"agent.gap.kind": "idle"}
-    assert attrs[3] == {"agent.gap.kind": "tool", "gen_ai.tool.name": "Edit", "agent.tool.latency_ms": 300}
+    assert attrs[3] == {"agent.gap.kind": "tool", "agent.gap.tools": [{"name": "Edit", "start_sec": 0.0, "duration_sec": 0.3}]}
     assert attrs[4] == {}
+
+
+def test_tracelab_without_sandbox_attaches_no_gap_attributes(tmp_path: Path) -> None:
+    gen = _sandbox_gen([str(_write_jsonl(tmp_path / "t.jsonl", _gap_rows()))], None)
+    session = next(s for s in gen.sessions if s is not None)
+    assert all(e.call.attributes is None for e in session.graph.events.values())

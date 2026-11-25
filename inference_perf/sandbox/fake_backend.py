@@ -15,7 +15,9 @@
 
 Lets the tool-execution path, metrics and reports run end to end without a
 cluster. ``sleep <seconds>`` commands sleep for that long; any other command
-costs only the configured exec overhead.
+costs only the configured exec overhead. A synchronous suspend also pays the
+snapshot upload; an asynchronous one returns once the snapshot is captured. The
+fake has no nodes, so durability is modeled as latency only.
 """
 
 import asyncio
@@ -24,8 +26,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from inference_perf.config.datagen.toolexec import FakeSubstrateConfig
-from inference_perf.toolexec.substrate_executor import ExecResult, SubstrateBackend
+from inference_perf.config.sandbox import FakeSubstrateConfig
+from inference_perf.sandbox.substrate_executor import ExecResult, SubstrateBackend
 
 _SLEEP_COMMAND = re.compile(r"^\s*sleep\s+([0-9]*\.?[0-9]+)\s*$")
 
@@ -79,7 +81,9 @@ class FakeSubstrateBackend(SubstrateBackend):
         actor = self._get(name)
         if actor.suspended:
             return
-        await self._delay(self.config.suspend_latency_ms)
+        await self._delay(self.config.snapshot_capture_latency_ms)
+        if synchronous:
+            await self._delay(self.config.snapshot_upload_latency_ms)
         actor.suspended = True
 
     async def delete_actor(self, name: str) -> None:

@@ -13,19 +13,19 @@
 # limitations under the License.
 from typing import Optional
 
-from inference_perf.config.datagen.toolexec import ToolExecutorConfig, ToolExecutorType
-from inference_perf.toolexec.base import ToolExecutor
-from inference_perf.toolexec.substrate_executor import SubstrateToolExecutor
+from inference_perf.config.sandbox import SandboxConfig, SandboxType
+from inference_perf.sandbox.base import ToolExecutor
+from inference_perf.sandbox.substrate_executor import SubstrateToolExecutor
 
 
-def build_tool_executor(config: ToolExecutorConfig, seed: Optional[int] = None) -> ToolExecutor:
-    if config.type == ToolExecutorType.FAKE_SUBSTRATE:
-        from inference_perf.toolexec.fake_backend import FakeSubstrateBackend
+def build_tool_executor(config: SandboxConfig, seed: Optional[int] = None) -> ToolExecutor:
+    if config.type == SandboxType.FAKE_SUBSTRATE:
+        from inference_perf.sandbox.fake_backend import FakeSubstrateBackend
 
         return SubstrateToolExecutor(config, FakeSubstrateBackend(config.fake, seed=seed), name="fake_substrate")
-    if config.type == ToolExecutorType.SUBSTRATE:
-        from inference_perf.toolexec.ate_backend import AteSubstrateBackend
+    if config.type == SandboxType.SUBSTRATE:
+        from inference_perf.sandbox.ate_backend import AteSubstrateBackend
 
-        assert config.substrate is not None  # enforced by ToolExecutorConfig
+        assert config.substrate is not None  # enforced by SandboxConfig
         return SubstrateToolExecutor(config, AteSubstrateBackend(config.substrate), name="substrate")
-    raise ValueError(f"Unsupported tool executor type: {config.type}")
+    raise ValueError(f"Unsupported sandbox type: {config.type}")

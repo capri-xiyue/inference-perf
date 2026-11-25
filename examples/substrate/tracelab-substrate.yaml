@@ -1,0 +1,68 @@
+# TraceLab replay with every recorded tool call executed on GKE Agent Substrate
+# actors and LLM calls served by llm-d (through the inference gateway). Runs as a
+# Pod in the cluster; see deploy/substrate/README.md and docs/sandbox.md.
+load:
+  type: trace_session_replay
+  stages:
+    - concurrent_sessions: 12
+      num_sessions: 24
+  num_workers: 2
+  worker_max_concurrency: 100
+  request_timeout: 900
+api:
+  type: chat
+  streaming: true
+server:
+  type: vllm
+  model_name: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+  base_url: http://inference-gateway.llm-d.svc.cluster.local
+  ignore_eos: true
+tokenizer:
+  pretrained_model_name_or_path: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+data:
+  type: tracelab_trace_replay
+  tracelab_trace_replay:
+    trace_files: ["/data/tracelab.jsonl"]
+    use_static_model: true
+    static_model_name: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+    filter: "lambda x: x['max_tokens'] < 262144"
+    trace_idle_gap_cap_seconds: null
+sandbox:
+  type: substrate
+  actor:
+    name_prefix: ip
+    assignment:
+      default: session
+    suspend:
+      between_turns: true
+      after_each_tool_call: false
+      snapshot_durability: async
+    tool_call:
+      timeout_sec: 300
+    delete_on_session_end: true
+  substrate:
+    atespace: ip-bench
+    actor_template: python-runtime
+    api:
+      endpoint: api.ate-system.svc:443
+      server_name: api.ate-system.svc
+      ca_path: /run/ate/ca.crt
+      cert_bundle_path: /run/ate/credential-bundle.pem
+    router:
+      url: https://atenet-router.ate-system.svc
+      ca_path: /run/ate/ca.crt
+      cert_bundle_path: /run/ate/credential-bundle.pem
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: true
+    per_request_fields:
+      request: false
+      response: false
+      response_chunks: false
+      info: true
+      computed_metrics: true
+  session_lifecycle:
+    summary: true
+    per_session: true

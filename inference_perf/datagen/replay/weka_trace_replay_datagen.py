@@ -74,7 +74,6 @@ from huggingface_hub import hf_hub_download
 from pydantic import BaseModel, Field
 
 from inference_perf.config import APIConfig, DataConfig
-from inference_perf.config.datagen.toolexec import AGENT_ID_ATTRIBUTE, AGENT_NAME_ATTRIBUTE
 from inference_perf.datagen.replay.replay_graph_session_datagen import (
     ReplaySession,
     ReplayGraphSessionGeneratorBase,
@@ -1358,12 +1357,6 @@ class WekaTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
                         completion_tokens=creq.output_length,
                         temperature=0.0,
                         max_tokens_recorded=creq.output_length,
-                        # Identify the subagent, so per-agent policies (e.g. which agents
-                        # get a dedicated sandbox actor) can select its calls.
-                        extra_attributes={
-                            AGENT_ID_ATTRIBUTE: cp.entry.agent_id,
-                            AGENT_NAME_ATTRIBUTE: cp.entry.subagent_type,
-                        },
                     )
                 )
 

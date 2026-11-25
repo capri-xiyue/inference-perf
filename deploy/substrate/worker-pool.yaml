@@ -1,4 +1,4 @@
-# WorkerPool for the inference-perf tool-executor actors (gVisor), plus the
+# WorkerPool for the inference-perf sandbox actors (gVisor), plus the
 # client namespace. Apply after `ate-setup deploy ate-system`.
 apiVersion: v1
 kind: Namespace
