@@ -17,13 +17,18 @@ execution time and `alpha_inf`.
 
 ## How a gap is executed
 
-Each event's gap is classified before the event is dispatched:
+Each event's gap is classified before the event is dispatched, from the best evidence the trace has:
 
-| Gap | When | What the executor does |
-|---|---|---|
-| `idle` | The session's first request; or a gap of at least `idle_gap_threshold_ms` (default 5000) that is not followed by a `role: tool` message | Suspend the actor (`suspend_on_idle`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
-| `tool` | The request's last message is `role: tool`; or a shorter non-zero gap (Weka traces carry no tool roles) | Wake the actor if needed, then run `tool_command_template` in it (default `sleep {duration_sec}`, so the in-actor time matches the trace). |
-| `none` | Zero-length gap | Nothing. |
+1. The session's first request is `idle` (the user starts the session).
+2. A kind the trace recorded on the call (`agent.gap.kind` = `tool` / `idle`). TraceLab replay sets it from `timing_events`: a round fed by `tool_result` follows a tool gap, one fed by `user_message` follows user idle time. It also records the tools that ran (`gen_ai.tool.name`, from the previous round's `tool_calls`) and their wall time (`agent.tool.latency_ms`).
+3. A request whose last message is `role: tool` (OTel traces) follows a tool gap.
+4. Otherwise the gap length decides (Weka / AgentX traces record neither): at least `idle_gap_threshold_ms` (default 5000) is `idle`, shorter non-zero gaps are `tool`, zero is `none`.
+
+| Gap | What the executor does |
+|---|---|
+| `idle` | Suspend the actor (`suspend_on_idle`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
+| `tool` | Wake the actor if needed, then run `tool_command_template` in it (default `sleep {duration_sec}`, so the in-actor time matches the trace). The recorded tool names are reported in `agent_gap.tool_names`. |
+| `none` | Nothing. |
 
 Actors:
 

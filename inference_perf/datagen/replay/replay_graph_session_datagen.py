@@ -65,7 +65,7 @@ from inference_perf.payloads import Image, Images, RequestMetrics, Text
 from inference_perf.apis.streaming_parser import parse_sse_stream
 from inference_perf.config import APIConfig, APIType, DataConfig, SessionReplayConfig
 from inference_perf.config.datagen.replay import BadToolCallHandling, ToolChoiceMode
-from inference_perf.config.datagen.toolexec import ToolExecutorConfig
+from inference_perf.config.datagen.toolexec import GAP_KIND_ATTRIBUTE, TOOL_NAME_ATTRIBUTE, ToolExecutorConfig
 from inference_perf.datagen.base import LazyLoadDataMixin, SessionGenerator
 from inference_perf.datagen.replay.replay_graph_types import InputSegment, ReplayGraph
 from inference_perf.toolexec import (
@@ -735,8 +735,11 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
         executor = self.generator.get_tool_executor()
         executor_config = self.generator.get_tool_executor_config()
         assert executor is not None and executor_config is not None
-        actor_key = resolve_actor_key(executor_config.actor_assignment, session_id, self.call_attributes or {})
+        attributes = self.call_attributes or {}
+        actor_key = resolve_actor_key(executor_config.actor_assignment, session_id, attributes)
         last_role = self.original_messages[-1].get("role") if self.original_messages else None
+        recorded_kind = attributes.get(GAP_KIND_ATTRIBUTE)
+        tool_names = attributes.get(TOOL_NAME_ATTRIBUTE)
         ctx = GapContext(
             session_id=session_id,
             actor_key=actor_key,
@@ -747,7 +750,9 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                 wait_ms=self.wait_ms,
                 last_message_role=last_role if isinstance(last_role, str) else None,
                 idle_gap_threshold_ms=executor_config.idle_gap_threshold_ms,
+                recorded_kind=recorded_kind if isinstance(recorded_kind, str) else None,
             ),
+            tool_names=tool_names if isinstance(tool_names, str) else None,
         )
         logger.debug(f"Event {self.event_id} running {ctx.gap_kind.value} gap ({ctx.wait_sec:.3f}s) on {executor.name}")
         try:

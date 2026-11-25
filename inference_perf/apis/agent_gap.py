@@ -57,6 +57,8 @@ class AgentGapMetrics(BaseModel):
     cold: Optional[bool] = None
     tool_exec_sec: Optional[float] = None
     tool_exit_code: Optional[int] = None
+    # Tools the trace recorded for this gap (comma-separated), when known.
+    tool_names: Optional[str] = None
     error: Optional[str] = None
 
 

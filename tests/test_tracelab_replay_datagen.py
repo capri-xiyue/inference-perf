@@ -1382,3 +1382,43 @@ def test_tracelab_does_not_mutate_global_random_state(tmp_path: Path) -> None:
 
     second = _make_gen([trace_file])
     assert [s.source_id for s in first.sessions if s is not None] == [s.source_id for s in second.sessions if s is not None]
+
+
+def test_tracelab_records_gap_kind_and_tools_for_tool_executors(tmp_path: Path) -> None:
+    """Each round carries what its preceding gap was, from the recorded input events.
+
+    Round 1 is fed by tool_results of the two tools round 0 emitted (a tool gap,
+    timed by their merged wall time); round 2 is fed by a user_message (idle).
+    A round without timing events still marks a tool gap when the previous round
+    emitted tools, and an unexplained gap carries no kind at all.
+    """
+    tools_r0 = [
+        {"tool_name": "Read", "emitted_at": _ts(2.0), "result_at": _ts(2.5)},
+        {"tool_name": "Bash", "emitted_at": _ts(2.5), "result_at": _ts(4.0)},
+    ]
+    rows = [
+        _row("s", 0, 100, 10, tools=tools_r0, timing_events=_turn(0.0, 2.0)),
+        _row(
+            "s",
+            1,
+            120,
+            10,
+            timing_events=[
+                {"event_type": "tool_result", "timestamp": _ts(2.5)},
+                {"event_type": "tool_result", "timestamp": _ts(4.0)},
+                {"event_type": "text", "timestamp": _ts(5.0)},
+            ],
+        ),
+        _row("s", 2, 140, 10, tools=[{"tool_name": "Edit", "tool_wall_latency_ms": 300.0}], timing_events=_turn(40.0, 41.0)),
+        _row("s", 3, 160, 10),  # no timing events; round 2 emitted Edit
+        _row("s", 4, 180, 10),  # no timing events, no tools before it
+    ]
+    gen = _make_gen([str(_write_jsonl(tmp_path / "t.jsonl", rows))])
+    session = next(s for s in gen.sessions if s is not None)
+    events = sorted(session.graph.events.values(), key=lambda e: e.t_start_ms)
+    attrs = [e.call.attributes or {} for e in events]
+    assert attrs[0] == {}
+    assert attrs[1] == {"agent.gap.kind": "tool", "gen_ai.tool.name": "Read,Bash", "agent.tool.latency_ms": 2000}
+    assert attrs[2] == {"agent.gap.kind": "idle"}
+    assert attrs[3] == {"agent.gap.kind": "tool", "gen_ai.tool.name": "Edit", "agent.tool.latency_ms": 300}
+    assert attrs[4] == {}

@@ -43,6 +43,8 @@ class GapContext:
     # Recorded gap length after the replay cap (max_wait_ms).
     wait_sec: float
     gap_kind: GapKind
+    # Tools the trace recorded for this gap (comma-separated), when known.
+    tool_names: Optional[str] = None
 
 
 def resolve_actor_key(assignment: ActorAssignmentConfig, session_id: str, attributes: Mapping[str, object]) -> str:
@@ -65,15 +67,21 @@ def classify_gap(
     wait_ms: int,
     last_message_role: Optional[str],
     idle_gap_threshold_ms: int,
+    recorded_kind: Optional[str] = None,
 ) -> GapKind:
-    """Decide what the gap before an event stands for.
+    """Decide what the gap before an event stands for, from the best evidence available.
 
-    - The session's first request starts a turn: the actor is woken (cold) first.
-    - A request whose last message is a role:tool result follows a tool call.
-    - Otherwise (e.g. weka traces, which carry no tool roles) the gap length decides:
-      long gaps are user idle time, short non-zero gaps are tool calls.
+    1. The session's first request starts a turn: the actor is woken (cold) first.
+    2. A kind the trace recorded (agent.gap.kind, e.g. from TraceLab timing_events).
+    3. A request whose last message is a role:tool result follows a tool call.
+    4. Otherwise (e.g. weka traces, which carry neither) the gap length decides:
+       long gaps are user idle time, short non-zero gaps are tool calls.
     """
     if not has_predecessors:
+        return GapKind.IDLE
+    if recorded_kind == GapKind.TOOL.value:
+        return GapKind.TOOL
+    if recorded_kind == GapKind.IDLE.value:
         return GapKind.IDLE
     if last_message_role == "tool":
         return GapKind.TOOL

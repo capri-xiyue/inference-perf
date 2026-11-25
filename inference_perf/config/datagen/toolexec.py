@@ -42,6 +42,13 @@ class ToolExecutorType(str, Enum):
 AGENT_ID_ATTRIBUTE = "gen_ai.agent.id"
 AGENT_NAME_ATTRIBUTE = "gen_ai.agent.name"
 
+# Call attributes that describe the gap before an LLM call, when the trace records
+# it (e.g. TraceLab timing_events). GAP_KIND_ATTRIBUTE is "tool" or "idle" and takes
+# precedence over gap-length heuristics; the tool attributes are reported.
+GAP_KIND_ATTRIBUTE = "agent.gap.kind"
+TOOL_NAME_ATTRIBUTE = "gen_ai.tool.name"
+TOOL_LATENCY_ATTRIBUTE = "agent.tool.latency_ms"
+
 
 class ActorAssignment(str, Enum):
     # Run the gap on the session's shared actor (Claude Code style: subagents share

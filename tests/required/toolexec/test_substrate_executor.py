@@ -85,6 +85,31 @@ class TestClassifyGap:
         got = classify_gap(has_predecessors=has_pred, wait_ms=wait_ms, last_message_role=role, idle_gap_threshold_ms=5000)
         assert got == expected
 
+    @pytest.mark.parametrize(
+        "recorded,wait_ms,role,expected",
+        [
+            ("tool", 30000, "user", GapKind.TOOL),  # a 30s build is still a tool, whatever its length
+            ("idle", 300, "tool", GapKind.IDLE),  # recorded user input beats heuristics
+            ("bogus", 300, "user", GapKind.TOOL),  # unknown values fall through to heuristics
+            (None, 9000, "user", GapKind.IDLE),
+        ],
+    )
+    def test_recorded_kind_takes_precedence(self, recorded: str, wait_ms: int, role: str, expected: GapKind) -> None:
+        got = classify_gap(
+            has_predecessors=True,
+            wait_ms=wait_ms,
+            last_message_role=role,
+            idle_gap_threshold_ms=5000,
+            recorded_kind=recorded,
+        )
+        assert got == expected
+
+    def test_session_start_is_always_idle(self) -> None:
+        got = classify_gap(
+            has_predecessors=False, wait_ms=0, last_message_role=None, idle_gap_threshold_ms=5000, recorded_kind="tool"
+        )
+        assert got == GapKind.IDLE
+
 
 class TestActorAssignment:
     EXPLORE = {"gen_ai.agent.id": "a1", "gen_ai.agent.name": "Explore"}

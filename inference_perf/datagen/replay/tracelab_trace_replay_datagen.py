@@ -63,6 +63,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 from pydantic import BaseModel, Field
 
 from inference_perf.config import APIConfig, DataConfig, TraceLabTraceReplayConfig
+from inference_perf.config.datagen.toolexec import GAP_KIND_ATTRIBUTE, TOOL_LATENCY_ATTRIBUTE, TOOL_NAME_ATTRIBUTE
 from inference_perf.datagen.replay.otel_trace_to_replay_graph import (
     DEPENDENCY_TYPE,
     RawCall,
@@ -776,6 +777,31 @@ class TraceLabTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
             merged_ms += (cur_end - cur_start) * 1000.0
         return max(int(merged_ms + serial_ms), 0)
 
+    @staticmethod
+    def _gap_attributes(prev: TraceLabRound, curr: TraceLabRound, gap_ms: int) -> Dict[str, object]:
+        """Describe the gap before ``curr`` for tool executors (see config.datagen.toolexec).
+
+        The round was submitted by its last input event: ``tool_result`` means the
+        gap was tool execution, ``user_message`` means the user was typing. Without
+        timing events, tool calls emitted by ``prev`` still mark a tool gap. The
+        tools that ran are the ones ``prev`` emitted.
+        """
+        attributes: Dict[str, object] = {}
+        inputs = [
+            (_parse_ts(e.timestamp), e.event_type) for e in curr.timing_events or [] if e.event_type in INPUT_EVENT_TYPES
+        ]
+        timed = [(stamp, kind) for stamp, kind in inputs if stamp is not None]
+        if timed:
+            last_input = max(timed, key=lambda item: item[0])[1]
+            attributes[GAP_KIND_ATTRIBUTE] = "tool" if last_input == "tool_result" else "idle"
+        elif prev.tools:
+            attributes[GAP_KIND_ATTRIBUTE] = "tool"
+        names = [t.tool_name for t in prev.tools or [] if t.tool_name]
+        if names and attributes.get(GAP_KIND_ATTRIBUTE) == "tool":
+            attributes[TOOL_NAME_ATTRIBUTE] = ",".join(names)
+            attributes[TOOL_LATENCY_ATTRIBUTE] = gap_ms
+        return attributes
+
     def _reconstruct_raw_calls(self, session_id: str, rounds: List[TraceLabRound]) -> List[RawCall]:
         model_map = self._build_model_map([r.model or "" for r in rounds if r.model])
         cap_seconds = self.tracelab_config.trace_idle_gap_cap_seconds
@@ -796,11 +822,13 @@ class TraceLabTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
             # Spacing before this round: the recorded think time from
             # timing_events when present, else the previous round's tool
             # latency (those tools ran after that round's output).
+            gap_attributes: Dict[str, object] = {}
             if i > 0 and not self.tracelab_config.ignore_trace_delays:
                 gap = self._round_gap_ms(rounds[i - 1], rnd)
                 if gap is None:
                     gap = self._tool_latency_ms(rounds[i - 1])
                 t_ms += gap if cap_ms is None else min(gap, cap_ms)
+                gap_attributes = self._gap_attributes(rounds[i - 1], rnd, self._tool_latency_ms(rounds[i - 1]))
 
             prompt_text, prompt_ids, shared = self._build_prompt(
                 session_id=session_id,
@@ -848,6 +876,7 @@ class TraceLabTraceReplayDataGenerator(ReplayGraphSessionGeneratorBase):
                     # and be replaced by the client-level default; use this
                     # replay's own default instead.
                     max_tokens_recorded=out_tokens or self.tracelab_config.default_max_tokens,
+                    extra_attributes=gap_attributes,
                 )
             )
 

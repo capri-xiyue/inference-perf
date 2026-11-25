@@ -162,6 +162,7 @@ class SubstrateToolExecutor(ToolExecutor):
             executor=self.name,
             trace_wait_sec=ctx.wait_sec,
             gap_start=_now(),
+            tool_names=ctx.tool_names,
         )
         try:
             if ctx.gap_kind == GapKind.NONE:
