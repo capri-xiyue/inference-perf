@@ -48,14 +48,13 @@ Actors:
 
 Waking:
 
-Suspend and wake (the two suspend points are independent):
+Suspend and wake (the two suspend points are independent). A suspended actor is always woken by inference-perf calling `ResumeActor`, timed directly as `wake_sec`:
 
 | Setting | Values | Meaning |
 |---|---|---|
 | `suspend_actor.between_turns` | `true` (default) / `false` | Suspend during user idle time between turns; the next turn wakes the actor |
 | `suspend_actor.after_each_tool_call` | `false` (default) / `true` | Suspend after every tool call, off the request path while the next LLM call runs; the next tool call wakes the actor |
 | `snapshot_durability` | `async` (default) / `sync` | `SuspendActor` returns once the snapshot is on the node, or only after it reaches durable storage (Substrate `DurabilityMode`) |
-| `wake_via` | `resume_actor_rpc` (default) / `router_request` | inference-perf calls `ResumeActor` and times it directly; or the request goes straight to `atenet-router`, which parks it and resumes the actor (request parking), and the wake is estimated as request time minus the tool's duration (`wake_estimated: true`) |
 
 ## Metrics
 
@@ -108,7 +107,6 @@ data:
         between_turns: true
         after_each_tool_call: false
       snapshot_durability: async
-      wake_via: resume_actor_rpc
       tool_command_template: "sleep {duration_sec:.3f}"
       substrate:
         atespace: inference-perf

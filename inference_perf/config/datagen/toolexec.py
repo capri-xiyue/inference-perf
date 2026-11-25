@@ -86,14 +86,6 @@ class ActorAssignmentConfig(StrictBaseModel):
         return self.default
 
 
-class WakeVia(str, Enum):
-    # inference-perf calls ResumeActor before sending traffic; wake latency is timed directly.
-    RESUME_ACTOR_RPC = "resume_actor_rpc"
-    # The first request goes straight to atenet-router, which resumes the actor
-    # (request parking). Wake latency is estimated as request time minus the tool's duration.
-    ROUTER_REQUEST = "router_request"
-
-
 class SnapshotDurability(str, Enum):
     # SuspendActor returns once the snapshot is on the node; upload to GCS continues in the background.
     ASYNC = "async"
@@ -182,7 +174,6 @@ class ToolExecutorConfig(StrictBaseModel):
     snapshot_durability: SnapshotDurability = Field(
         SnapshotDurability.ASYNC, description="When SuspendActor returns relative to its snapshot reaching durable storage."
     )
-    wake_via: WakeVia = Field(WakeVia.RESUME_ACTOR_RPC, description="What wakes a suspended actor.")
     tool_command_template: str = Field(
         "sleep {duration_sec:.3f}",
         description="Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length.",

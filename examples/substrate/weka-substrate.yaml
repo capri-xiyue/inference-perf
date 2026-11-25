@@ -39,7 +39,6 @@ data:
         between_turns: true
         after_each_tool_call: false
       snapshot_durability: async
-      wake_via: resume_actor_rpc
       tool_command_template: "sleep {duration_sec:.3f}"
       substrate:
         atespace: inference-perf

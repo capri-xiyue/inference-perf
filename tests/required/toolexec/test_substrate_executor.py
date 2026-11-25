@@ -23,7 +23,6 @@ from inference_perf.config.datagen.toolexec import (
     ActorAssignmentConfig,
     ActorAssignmentRule,
     FakeSubstrateConfig,
-    WakeVia,
     ToolExecutorConfig,
     ToolExecutorType,
 )
@@ -212,16 +211,6 @@ class TestSubstrateExecutor:
         idle = await executor.run_gap(_ctx(GapKind.IDLE, wait_sec=0.01))
         assert idle.suspend_sec is None  # the idle gap itself suspends nothing
         assert idle.resumed is True  # but it still wakes the actor the tool call suspended
-
-    async def test_implicit_resume_attributes_excess_exec_time_to_wake(self) -> None:
-        executor, backend = _executor(wake_via=WakeVia.ROUTER_REQUEST, suspend_actor={"after_each_tool_call": True})
-        await executor.run_gap(_ctx(GapKind.IDLE))  # implicit wake: a no-op request
-        await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
-        m = await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.05))
-        assert "resume" in _ops(backend)  # the fake router resumes inside execute
-        assert m.wake_estimated is True and m.resumed is True
-        assert m.wake_sec is not None and m.wake_sec >= WARM_MS / 1000 * 0.9
-        assert m.tool_exec_sec is not None and m.tool_exec_sec >= 0.05 + WARM_MS / 1000 * 0.9
 
     async def test_none_gap_touches_no_actor(self) -> None:
         executor, backend = _executor()

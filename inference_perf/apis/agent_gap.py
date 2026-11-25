@@ -49,8 +49,6 @@ class AgentGapMetrics(BaseModel):
     # Wake: when it was triggered and how long until the actor served.
     wake_start: Optional[float] = None
     wake_sec: Optional[float] = None
-    # True when wake_sec is derived (implicit resume) rather than timed directly.
-    wake_estimated: bool = False
     # True if the actor was actually restored; False if it was already running.
     resumed: Optional[bool] = None
     # Whether this wake restored from the template's golden snapshot (first resume).

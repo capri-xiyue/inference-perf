@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from inference_perf.apis.agent_gap import AgentGapMetrics, GapKind
-from inference_perf.config.datagen.toolexec import SnapshotDurability, ToolExecutorConfig, WakeVia
+from inference_perf.config.datagen.toolexec import SnapshotDurability, ToolExecutorConfig
 from inference_perf.toolexec.base import GapContext, ToolExecutionError, ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ class SubstrateToolExecutor(ToolExecutor):
                 logger.warning("Background suspend of actor %s failed: %s", actor.name, e)
 
     async def _wake(self, actor: _ActorState, metrics: AgentGapMetrics) -> None:
-        """Wake the actor and record the wake on metrics (explicit, or a no-op request when implicit)."""
+        """Wake the actor with ResumeActor and record the wake on metrics."""
         await self._await_pending_suspend(actor)
         async with actor.lock:
             metrics.wake_start = _now()
@@ -145,13 +145,7 @@ class SubstrateToolExecutor(ToolExecutor):
                 metrics.resumed = False
                 return
             metrics.cold = not actor.ever_resumed
-            if self.config.wake_via == WakeVia.RESUME_ACTOR_RPC:
-                metrics.resumed = await self.backend.resume_actor(actor.name)
-            else:
-                # The router parks the request and resumes the actor; time the round trip.
-                await self.backend.execute(actor.name, "true", self.config.tool_timeout_sec)
-                metrics.resumed = True
-                metrics.wake_estimated = True
+            metrics.resumed = await self.backend.resume_actor(actor.name)
             metrics.wake_sec = _now() - metrics.wake_start
             actor.suspended = False
             actor.ever_resumed = True
@@ -198,18 +192,11 @@ class SubstrateToolExecutor(ToolExecutor):
 
     async def _run_tool_gap(self, ctx: GapContext, metrics: AgentGapMetrics) -> None:
         actor = await self._get_actor(ctx, metrics)
-        if self.config.wake_via == WakeVia.RESUME_ACTOR_RPC:
-            await self._wake(actor, metrics)
-            if metrics.resumed is False:
-                # Already running: no wake happened for this tool call.
-                metrics.wake_start = None
-                metrics.wake_sec = None
-        else:
-            await self._await_pending_suspend(actor)
-
-        implicit_wake = self.config.wake_via == WakeVia.ROUTER_REQUEST and actor.suspended
-        if implicit_wake:
-            metrics.cold = not actor.ever_resumed
+        await self._wake(actor, metrics)
+        if metrics.resumed is False:
+            # Already running: no wake happened for this tool call.
+            metrics.wake_start = None
+            metrics.wake_sec = None
         command = self.config.tool_command_template.format(duration_sec=ctx.wait_sec)
         actor.inflight_tools += 1
         try:
@@ -219,15 +206,6 @@ class SubstrateToolExecutor(ToolExecutor):
         finally:
             actor.inflight_tools -= 1
         metrics.tool_exit_code = result.exit_code
-        if implicit_wake:
-            # The router resumed the actor inside the call; whatever exceeds the tool's own
-            # duration is attributed to the wake.
-            metrics.wake_start = t0
-            metrics.wake_sec = max(0.0, metrics.tool_exec_sec - ctx.wait_sec)
-            metrics.wake_estimated = True
-            metrics.resumed = True
-            actor.suspended = False
-            actor.ever_resumed = True
         if result.exit_code != 0:
             logger.debug("Tool in actor %s exited %d (event %s)", actor.name, result.exit_code, ctx.event_id)
 
