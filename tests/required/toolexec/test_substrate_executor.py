@@ -23,7 +23,7 @@ from inference_perf.config.datagen.toolexec import (
     ActorAssignmentConfig,
     ActorAssignmentRule,
     FakeSubstrateConfig,
-    ResumeMode,
+    WakeVia,
     ToolExecutorConfig,
     ToolExecutorType,
 )
@@ -184,15 +184,15 @@ class TestSubstrateExecutor:
         # The wake starts once the recorded idle time is over; suspend time is part of it.
         assert m.wake_start is not None and m.wake_start - m.gap_start >= 0.1 * 0.95
 
-    async def test_suspend_on_idle_disabled_keeps_actor_running(self) -> None:
-        executor, backend = _executor(suspend_on_idle=False)
+    async def test_no_suspend_between_turns_keeps_actor_running(self) -> None:
+        executor, backend = _executor(suspend_actor={"between_turns": False})
         await executor.run_gap(_ctx(GapKind.IDLE))
         m = await executor.run_gap(_ctx(GapKind.IDLE, wait_sec=0.01))
         assert "suspend" not in _ops(backend)
         assert m.resumed is False and m.wake_sec == 0.0
 
-    async def test_suspend_during_inference_makes_next_tool_call_wake(self) -> None:
-        executor, backend = _executor(suspend_during_inference=True)
+    async def test_suspend_after_each_tool_call_makes_next_tool_call_wake(self) -> None:
+        executor, backend = _executor(suspend_actor={"after_each_tool_call": True})
         await executor.run_gap(_ctx(GapKind.IDLE))
         await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
         m = await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
@@ -200,8 +200,21 @@ class TestSubstrateExecutor:
         assert m.resumed is True and m.cold is False
         assert m.wake_sec is not None and m.wake_sec >= WARM_MS / 1000 * 0.9
 
+    async def test_suspend_points_are_independent(self) -> None:
+        # After each tool call but not between turns: the idle gap finds the actor
+        # running (no suspend, no wake) while tool calls keep paying wakes.
+        executor, backend = _executor(suspend_actor={"between_turns": False, "after_each_tool_call": True})
+        await executor.run_gap(_ctx(GapKind.IDLE))  # cold wake at session start
+        await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
+        tool = await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
+        assert tool.resumed is True
+        await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))  # leaves a background suspend
+        idle = await executor.run_gap(_ctx(GapKind.IDLE, wait_sec=0.01))
+        assert idle.suspend_sec is None  # the idle gap itself suspends nothing
+        assert idle.resumed is True  # but it still wakes the actor the tool call suspended
+
     async def test_implicit_resume_attributes_excess_exec_time_to_wake(self) -> None:
-        executor, backend = _executor(resume_mode=ResumeMode.IMPLICIT, suspend_during_inference=True)
+        executor, backend = _executor(wake_via=WakeVia.ROUTER_REQUEST, suspend_actor={"after_each_tool_call": True})
         await executor.run_gap(_ctx(GapKind.IDLE))  # implicit wake: a no-op request
         await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.0))
         m = await executor.run_gap(_ctx(GapKind.TOOL, wait_sec=0.05))

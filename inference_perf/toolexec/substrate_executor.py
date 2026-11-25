@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from inference_perf.apis.agent_gap import AgentGapMetrics, GapKind
-from inference_perf.config.datagen.toolexec import ResumeMode, SuspendMode, ToolExecutorConfig
+from inference_perf.config.datagen.toolexec import SnapshotDurability, ToolExecutorConfig, WakeVia
 from inference_perf.toolexec.base import GapContext, ToolExecutionError, ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,9 @@ class SubstrateToolExecutor(ToolExecutor):
             if actor.suspended or actor.inflight_tools > 0 or not actor.created:
                 return None
             t0 = _now()
-            await self.backend.suspend_actor(actor.name, synchronous=self.config.suspend_mode == SuspendMode.SYNC)
+            await self.backend.suspend_actor(
+                actor.name, synchronous=self.config.snapshot_durability == SnapshotDurability.SYNC
+            )
             actor.suspended = True
             return _now() - t0
 
@@ -143,7 +145,7 @@ class SubstrateToolExecutor(ToolExecutor):
                 metrics.resumed = False
                 return
             metrics.cold = not actor.ever_resumed
-            if self.config.resume_mode == ResumeMode.EXPLICIT:
+            if self.config.wake_via == WakeVia.RESUME_ACTOR_RPC:
                 metrics.resumed = await self.backend.resume_actor(actor.name)
             else:
                 # The router parks the request and resumes the actor; time the round trip.
@@ -185,7 +187,7 @@ class SubstrateToolExecutor(ToolExecutor):
 
     async def _run_idle_gap(self, ctx: GapContext, metrics: AgentGapMetrics) -> None:
         actor = await self._get_actor(ctx, metrics)
-        if self.config.suspend_on_idle:
+        if self.config.suspend_actor.between_turns:
             await self._await_pending_suspend(actor)
             metrics.suspend_sec = await self._suspend(actor)
         # The user is idle for the rest of the recorded gap; suspend time counts toward it.
@@ -196,7 +198,7 @@ class SubstrateToolExecutor(ToolExecutor):
 
     async def _run_tool_gap(self, ctx: GapContext, metrics: AgentGapMetrics) -> None:
         actor = await self._get_actor(ctx, metrics)
-        if self.config.resume_mode == ResumeMode.EXPLICIT:
+        if self.config.wake_via == WakeVia.RESUME_ACTOR_RPC:
             await self._wake(actor, metrics)
             if metrics.resumed is False:
                 # Already running: no wake happened for this tool call.
@@ -205,7 +207,7 @@ class SubstrateToolExecutor(ToolExecutor):
         else:
             await self._await_pending_suspend(actor)
 
-        implicit_wake = self.config.resume_mode == ResumeMode.IMPLICIT and actor.suspended
+        implicit_wake = self.config.wake_via == WakeVia.ROUTER_REQUEST and actor.suspended
         if implicit_wake:
             metrics.cold = not actor.ever_resumed
         command = self.config.tool_command_template.format(duration_sec=ctx.wait_sec)
@@ -229,7 +231,7 @@ class SubstrateToolExecutor(ToolExecutor):
         if result.exit_code != 0:
             logger.debug("Tool in actor %s exited %d (event %s)", actor.name, result.exit_code, ctx.event_id)
 
-        if self.config.suspend_during_inference and actor.pending_suspend is None:
+        if self.config.suspend_actor.after_each_tool_call and actor.pending_suspend is None:
             # Suspend while the next LLM call runs, off the request's critical path.
             actor.pending_suspend = asyncio.get_running_loop().create_task(self._suspend(actor))
 

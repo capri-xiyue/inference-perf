@@ -86,17 +86,31 @@ class ActorAssignmentConfig(StrictBaseModel):
         return self.default
 
 
-class ResumeMode(str, Enum):
-    # Call ResumeActor before sending traffic; wake latency is measured directly.
-    EXPLICIT = "explicit"
-    # Let atenet-router resume the actor for the first request (request parking).
-    # Wake latency is estimated as the request time minus the in-actor tool duration.
-    IMPLICIT = "implicit"
+class WakeVia(str, Enum):
+    # inference-perf calls ResumeActor before sending traffic; wake latency is timed directly.
+    RESUME_ACTOR_RPC = "resume_actor_rpc"
+    # The first request goes straight to atenet-router, which resumes the actor
+    # (request parking). Wake latency is estimated as request time minus the tool's duration.
+    ROUTER_REQUEST = "router_request"
 
 
-class SuspendMode(str, Enum):
-    SYNC = "sync"
+class SnapshotDurability(str, Enum):
+    # SuspendActor returns once the snapshot is on the node; upload to GCS continues in the background.
     ASYNC = "async"
+    # SuspendActor returns only after the snapshot is in durable storage.
+    SYNC = "sync"
+
+
+class SuspendActorConfig(StrictBaseModel):
+    """When the actor is suspended. The two moments are independent."""
+
+    between_turns: bool = Field(
+        True, description="Suspend during user idle time between turns; the next turn wakes the actor."
+    )
+    after_each_tool_call: bool = Field(
+        False,
+        description="Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor.",
+    )
 
 
 class FakeSubstrateConfig(StrictBaseModel):
@@ -162,12 +176,13 @@ class ToolExecutorConfig(StrictBaseModel):
             "actor; rules give selected agents a dedicated actor."
         ),
     )
-    resume_mode: ResumeMode = Field(ResumeMode.EXPLICIT, description="How a suspended actor is woken.")
-    suspend_on_idle: bool = Field(True, description="Suspend the actor at the start of every idle gap.")
-    suspend_during_inference: bool = Field(
-        False, description="Also suspend the actor after every tool call, so each tool call pays a wake."
+    suspend_actor: SuspendActorConfig = Field(
+        default_factory=SuspendActorConfig, description="When the actor is suspended: between turns, after each tool call."
     )
-    suspend_mode: SuspendMode = Field(SuspendMode.ASYNC, description="Durability mode used for SuspendActor.")
+    snapshot_durability: SnapshotDurability = Field(
+        SnapshotDurability.ASYNC, description="When SuspendActor returns relative to its snapshot reaching durable storage."
+    )
+    wake_via: WakeVia = Field(WakeVia.RESUME_ACTOR_RPC, description="What wakes a suspended actor.")
     tool_command_template: str = Field(
         "sleep {duration_sec:.3f}",
         description="Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length.",

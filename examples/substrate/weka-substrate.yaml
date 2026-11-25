@@ -35,9 +35,11 @@ data:
         rules:
           - match: {gen_ai.agent.name: "Explore"}
             actor: dedicated
-      resume_mode: explicit
-      suspend_on_idle: true
-      suspend_mode: async
+      suspend_actor:
+        between_turns: true
+        after_each_tool_call: false
+      snapshot_durability: async
+      wake_via: resume_actor_rpc
       tool_command_template: "sleep {duration_sec:.3f}"
       substrate:
         atespace: inference-perf

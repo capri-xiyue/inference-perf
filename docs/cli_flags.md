@@ -157,10 +157,10 @@ These command line flags are automatically generated from the CLI parser. The gl
 | `--data.otel_trace_replay.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no role:tool message to classify it, is treated as user idle time: the actor is suspended during the gap and woken at its end (a new turn). Shorter non-zero gaps are tool calls. |
 | `--data.otel_trace_replay.tool_executor.actor_assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.otel_trace_replay.tool_executor.actor_assignment.rules` | JSON | Ordered rules; the first match wins. |
-| `--data.otel_trace_replay.tool_executor.resume_mode` | Enum (explicit, implicit) | How a suspended actor is woken. |
-| `--data.otel_trace_replay.tool_executor.suspend_on_idle` | boolean | Suspend the actor at the start of every idle gap. |
-| `--data.otel_trace_replay.tool_executor.suspend_during_inference` | boolean | Also suspend the actor after every tool call, so each tool call pays a wake. |
-| `--data.otel_trace_replay.tool_executor.suspend_mode` | Enum (sync, async) | Durability mode used for SuspendActor. |
+| `--data.otel_trace_replay.tool_executor.suspend_actor.between_turns` | boolean | Suspend during user idle time between turns; the next turn wakes the actor. |
+| `--data.otel_trace_replay.tool_executor.suspend_actor.after_each_tool_call` | boolean | Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor. |
+| `--data.otel_trace_replay.tool_executor.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
+| `--data.otel_trace_replay.tool_executor.wake_via` | Enum (resume_actor_rpc, router_request) | What wakes a suspended actor. |
 | `--data.otel_trace_replay.tool_executor.tool_command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.otel_trace_replay.tool_executor.tool_timeout_sec` | float | Timeout for one tool execution. |
 | `--data.otel_trace_replay.tool_executor.delete_actors_on_session_end` | boolean | Delete a session's actors once it drains. |
@@ -213,10 +213,10 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.weka_trace_replay.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no role:tool message to classify it, is treated as user idle time: the actor is suspended during the gap and woken at its end (a new turn). Shorter non-zero gaps are tool calls. |
 | `--data.weka_trace_replay.tool_executor.actor_assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.weka_trace_replay.tool_executor.actor_assignment.rules` | JSON | Ordered rules; the first match wins. |
-| `--data.weka_trace_replay.tool_executor.resume_mode` | Enum (explicit, implicit) | How a suspended actor is woken. |
-| `--data.weka_trace_replay.tool_executor.suspend_on_idle` | boolean | Suspend the actor at the start of every idle gap. |
-| `--data.weka_trace_replay.tool_executor.suspend_during_inference` | boolean | Also suspend the actor after every tool call, so each tool call pays a wake. |
-| `--data.weka_trace_replay.tool_executor.suspend_mode` | Enum (sync, async) | Durability mode used for SuspendActor. |
+| `--data.weka_trace_replay.tool_executor.suspend_actor.between_turns` | boolean | Suspend during user idle time between turns; the next turn wakes the actor. |
+| `--data.weka_trace_replay.tool_executor.suspend_actor.after_each_tool_call` | boolean | Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor. |
+| `--data.weka_trace_replay.tool_executor.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
+| `--data.weka_trace_replay.tool_executor.wake_via` | Enum (resume_actor_rpc, router_request) | What wakes a suspended actor. |
 | `--data.weka_trace_replay.tool_executor.tool_command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.weka_trace_replay.tool_executor.tool_timeout_sec` | float | Timeout for one tool execution. |
 | `--data.weka_trace_replay.tool_executor.delete_actors_on_session_end` | boolean | Delete a session's actors once it drains. |
@@ -276,10 +276,10 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.tracelab_trace_replay.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no role:tool message to classify it, is treated as user idle time: the actor is suspended during the gap and woken at its end (a new turn). Shorter non-zero gaps are tool calls. |
 | `--data.tracelab_trace_replay.tool_executor.actor_assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.tracelab_trace_replay.tool_executor.actor_assignment.rules` | JSON | Ordered rules; the first match wins. |
-| `--data.tracelab_trace_replay.tool_executor.resume_mode` | Enum (explicit, implicit) | How a suspended actor is woken. |
-| `--data.tracelab_trace_replay.tool_executor.suspend_on_idle` | boolean | Suspend the actor at the start of every idle gap. |
-| `--data.tracelab_trace_replay.tool_executor.suspend_during_inference` | boolean | Also suspend the actor after every tool call, so each tool call pays a wake. |
-| `--data.tracelab_trace_replay.tool_executor.suspend_mode` | Enum (sync, async) | Durability mode used for SuspendActor. |
+| `--data.tracelab_trace_replay.tool_executor.suspend_actor.between_turns` | boolean | Suspend during user idle time between turns; the next turn wakes the actor. |
+| `--data.tracelab_trace_replay.tool_executor.suspend_actor.after_each_tool_call` | boolean | Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor. |
+| `--data.tracelab_trace_replay.tool_executor.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
+| `--data.tracelab_trace_replay.tool_executor.wake_via` | Enum (resume_actor_rpc, router_request) | What wakes a suspended actor. |
 | `--data.tracelab_trace_replay.tool_executor.tool_command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.tracelab_trace_replay.tool_executor.tool_timeout_sec` | float | Timeout for one tool execution. |
 | `--data.tracelab_trace_replay.tool_executor.delete_actors_on_session_end` | boolean | Delete a session's actors once it drains. |
@@ -384,10 +384,10 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.synthetic_agentic.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no role:tool message to classify it, is treated as user idle time: the actor is suspended during the gap and woken at its end (a new turn). Shorter non-zero gaps are tool calls. |
 | `--data.synthetic_agentic.tool_executor.actor_assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.synthetic_agentic.tool_executor.actor_assignment.rules` | JSON | Ordered rules; the first match wins. |
-| `--data.synthetic_agentic.tool_executor.resume_mode` | Enum (explicit, implicit) | How a suspended actor is woken. |
-| `--data.synthetic_agentic.tool_executor.suspend_on_idle` | boolean | Suspend the actor at the start of every idle gap. |
-| `--data.synthetic_agentic.tool_executor.suspend_during_inference` | boolean | Also suspend the actor after every tool call, so each tool call pays a wake. |
-| `--data.synthetic_agentic.tool_executor.suspend_mode` | Enum (sync, async) | Durability mode used for SuspendActor. |
+| `--data.synthetic_agentic.tool_executor.suspend_actor.between_turns` | boolean | Suspend during user idle time between turns; the next turn wakes the actor. |
+| `--data.synthetic_agentic.tool_executor.suspend_actor.after_each_tool_call` | boolean | Suspend after every tool call, while the next LLM call runs; the next tool call wakes the actor. |
+| `--data.synthetic_agentic.tool_executor.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
+| `--data.synthetic_agentic.tool_executor.wake_via` | Enum (resume_actor_rpc, router_request) | What wakes a suspended actor. |
 | `--data.synthetic_agentic.tool_executor.tool_command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.synthetic_agentic.tool_executor.tool_timeout_sec` | float | Timeout for one tool execution. |
 | `--data.synthetic_agentic.tool_executor.delete_actors_on_session_end` | boolean | Delete a session's actors once it drains. |

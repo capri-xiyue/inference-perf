@@ -26,7 +26,7 @@ Each event's gap is classified before the event is dispatched, from the best evi
 
 | Gap | What the executor does |
 |---|---|
-| `idle` | Suspend the actor (`suspend_on_idle`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
+| `idle` | Suspend the actor (`suspend_actor.between_turns`), wait out the rest of the recorded gap, then **wake** it. Starts a new turn. |
 | `tool` | Wake the actor if needed, then run `tool_command_template` in it (default `sleep {duration_sec}`, so the in-actor time matches the trace). The recorded tool names are reported in `agent_gap.tool_names`. |
 | `none` | Nothing. |
 
@@ -48,9 +48,14 @@ Actors:
 
 Waking:
 
-- `resume_mode: explicit` (default) calls `ResumeActor` and times it directly.
-- `resume_mode: implicit` sends traffic straight to `atenet-router`, which parks the request and resumes the actor. Wake time is then estimated as request time minus the tool's own duration (`wake_estimated: true`).
-- `suspend_during_inference: true` also suspends after every tool call (off the request path), so each tool call pays a wake.
+Suspend and wake (the two suspend points are independent):
+
+| Setting | Values | Meaning |
+|---|---|---|
+| `suspend_actor.between_turns` | `true` (default) / `false` | Suspend during user idle time between turns; the next turn wakes the actor |
+| `suspend_actor.after_each_tool_call` | `false` (default) / `true` | Suspend after every tool call, off the request path while the next LLM call runs; the next tool call wakes the actor |
+| `snapshot_durability` | `async` (default) / `sync` | `SuspendActor` returns once the snapshot is on the node, or only after it reaches durable storage (Substrate `DurabilityMode`) |
+| `wake_via` | `resume_actor_rpc` (default) / `router_request` | inference-perf calls `ResumeActor` and times it directly; or the request goes straight to `atenet-router`, which parks it and resumes the actor (request parking), and the wake is estimated as request time minus the tool's duration (`wake_estimated: true`) |
 
 ## Metrics
 
@@ -80,7 +85,7 @@ into `cold` (first turn: restore from the template's golden snapshot) and
 | `first_call_ttft_sec` | TTFT of the turn's first call alone |
 | `alpha_inf` | Σ LLM call latency / Lturn (serial sum; can exceed 1 with parallel subagents) |
 | `tool_exec_sec` | Ltool_exec per tool call (round trip through the router, incl. in-actor time) |
-| `tool_wake_sec` | Wakes paid by tool calls (with `suspend_during_inference`) |
+| `tool_wake_sec` | Wakes paid by tool calls (with `suspend_actor.after_each_tool_call`) |
 
 Omitting `tool_executor` leaves every report byte-identical to a run without it.
 
@@ -99,8 +104,11 @@ data:
         rules:
           - match: {gen_ai.agent.name: "Explore"}
             actor: dedicated
-      resume_mode: explicit
-      suspend_on_idle: true
+      suspend_actor:
+        between_turns: true
+        after_each_tool_call: false
+      snapshot_durability: async
+      wake_via: resume_actor_rpc
       tool_command_template: "sleep {duration_sec:.3f}"
       substrate:
         atespace: inference-perf
