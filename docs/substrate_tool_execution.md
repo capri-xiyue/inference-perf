@@ -99,9 +99,7 @@ data:
     tool_executor:
       type: substrate            # or fake_substrate (no cluster)
       idle_gap_threshold_ms: 5000
-      actor:                     # everything about the actors
-        atespace: inference-perf
-        template: python-runtime
+      actor:                     # backend-independent actor behavior
         name_prefix: ip
         assignment:              # which actor runs each gap
           default: session
@@ -115,15 +113,17 @@ data:
         tool_call:               # what runs in the actor for a tool gap
           command_template: "sleep {duration_sec:.3f}"
           timeout_sec: 300
-          execute_path: /execute
         delete_on_session_end: true
-      substrate:                 # connection only
+      substrate:                 # Substrate specifics: where actors live, how to reach it
+        atespace: inference-perf
+        actor_template: python-runtime
         api:
           endpoint: api.ate-system.svc:443
           ca_path: /run/servicedns-ca/ca.crt
           token_path: /run/ate-token/token
         router:
           url: https://atenet-router.ate-system.svc
+          execute_path: /execute
           ca_path: /run/router-ca/ca.crt
           cert_bundle_path: /run/podidentity.podcert.ate.dev/credential-bundle.pem
 ```

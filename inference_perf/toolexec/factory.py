@@ -26,5 +26,6 @@ def build_tool_executor(config: ToolExecutorConfig, seed: Optional[int] = None) 
     if config.type == ToolExecutorType.SUBSTRATE:
         from inference_perf.toolexec.ate_backend import AteSubstrateBackend
 
-        return SubstrateToolExecutor(config, AteSubstrateBackend(config.substrate, config.actor), name="substrate")
+        assert config.substrate is not None  # enforced by ToolExecutorConfig
+        return SubstrateToolExecutor(config, AteSubstrateBackend(config.substrate), name="substrate")
     raise ValueError(f"Unsupported tool executor type: {config.type}")

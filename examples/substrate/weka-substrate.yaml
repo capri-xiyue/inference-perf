@@ -29,8 +29,6 @@ data:
       type: substrate
       idle_gap_threshold_ms: 5000
       actor:
-        atespace: inference-perf
-        template: python-runtime
         # Main agent and most subagents share the session's actor; code-search
         # subagents get a sandbox of their own.
         assignment:
@@ -45,6 +43,8 @@ data:
         tool_call:
           command_template: "sleep {duration_sec:.3f}"
       substrate:
+        atespace: inference-perf
+        actor_template: python-runtime
         api:
           endpoint: api.ate-system.svc:443
           ca_path: /run/servicedns-ca/ca.crt

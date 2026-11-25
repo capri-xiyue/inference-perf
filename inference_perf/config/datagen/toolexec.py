@@ -116,9 +116,6 @@ class ActorToolCallConfig(StrictBaseModel):
         description="Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length.",
     )
     timeout_sec: float = Field(300.0, gt=0, description="Timeout for one tool execution.")
-    execute_path: str = Field(
-        "/execute", description="Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API)."
-    )
 
     @model_validator(mode="after")
     def validate_command_template(self) -> "ActorToolCallConfig":
@@ -130,12 +127,8 @@ class ActorToolCallConfig(StrictBaseModel):
 
 
 class ActorConfig(StrictBaseModel):
-    """Everything about the actors that run tool gaps: what they are, who uses which, and their lifecycle."""
+    """Backend-independent actor behavior: naming, who uses which actor, suspend, tool calls, cleanup."""
 
-    atespace: Optional[str] = Field(None, description="Atespace that holds the actors (required for type=substrate).")
-    template: Optional[str] = Field(
-        None, description="ActorTemplate (in the same atespace) every actor is created from (required for type=substrate)."
-    )
     name_prefix: str = Field("ip", description="Prefix for generated actor names.")
     assignment: ActorAssignmentConfig = Field(
         default_factory=ActorAssignmentConfig,
@@ -185,6 +178,9 @@ class SubstrateRouterConfig(StrictBaseModel):
     """atenet-router data plane (traffic to actors)."""
 
     url: str = Field("https://atenet-router.ate-system.svc", description="atenet-router base URL.")
+    execute_path: str = Field(
+        "/execute", description="Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API)."
+    )
     ca_path: Optional[str] = Field(None, description="CA bundle that verifies atenet-router.")
     cert_bundle_path: Optional[str] = Field(
         None, description="Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router."
@@ -192,8 +188,10 @@ class SubstrateRouterConfig(StrictBaseModel):
 
 
 class SubstrateConfig(StrictBaseModel):
-    """Connection settings for a GKE Agent Substrate installation."""
+    """GKE Agent Substrate specifics: where actors live and how to reach the installation."""
 
+    atespace: str = Field(..., description="Atespace that holds the actors.")
+    actor_template: str = Field(..., description="ActorTemplate (in the same atespace) every actor is created from.")
     api: SubstrateApiConfig = Field(default_factory=SubstrateApiConfig, description="Control plane connection.")
     router: SubstrateRouterConfig = Field(default_factory=SubstrateRouterConfig, description="Data plane connection.")
     request_timeout_sec: float = Field(120.0, gt=0, description="Timeout for a single control or data plane call.")
@@ -211,14 +209,12 @@ class ToolExecutorConfig(StrictBaseModel):
             "user idle time (a new turn). Shorter non-zero gaps are tool calls."
         ),
     )
-    actor: ActorConfig = Field(default_factory=ActorConfig, description="Actor identity, assignment and lifecycle.")
-    substrate: SubstrateConfig = Field(
-        default_factory=SubstrateConfig, description="Substrate connection settings (type=substrate)."
-    )
+    actor: ActorConfig = Field(default_factory=ActorConfig, description="Backend-independent actor behavior.")
+    substrate: Optional[SubstrateConfig] = Field(None, description="Substrate settings (required for type=substrate).")
     fake: FakeSubstrateConfig = Field(default_factory=FakeSubstrateConfig, description="Fake backend latency model.")
 
     @model_validator(mode="after")
     def validate_backend(self) -> "ToolExecutorConfig":
-        if self.type == ToolExecutorType.SUBSTRATE and (not self.actor.atespace or not self.actor.template):
-            raise ValueError("tool_executor.actor.atespace and tool_executor.actor.template are required for type 'substrate'")
+        if self.type == ToolExecutorType.SUBSTRATE and self.substrate is None:
+            raise ValueError("tool_executor.substrate is required when tool_executor.type is 'substrate'")
         return self

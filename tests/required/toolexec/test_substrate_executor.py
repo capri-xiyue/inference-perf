@@ -244,13 +244,13 @@ class TestSubstrateExecutor:
 
 
 class TestConfig:
-    def test_substrate_type_requires_actor_identity(self) -> None:
-        with pytest.raises(ValueError, match="actor.atespace and tool_executor.actor.template are required"):
+    def test_substrate_type_requires_substrate_block(self) -> None:
+        with pytest.raises(ValueError, match="tool_executor.substrate is required"):
             ToolExecutorConfig(type=ToolExecutorType.SUBSTRATE)
         cfg = ToolExecutorConfig.model_validate(
-            {"type": "substrate", "actor": {"atespace": "bench", "template": "python-runtime"}}
+            {"type": "substrate", "substrate": {"atespace": "bench", "actor_template": "python-runtime"}}
         )
-        assert cfg.substrate.api.endpoint == "api.ate-system.svc:443"
+        assert cfg.substrate is not None and cfg.substrate.api.endpoint == "api.ate-system.svc:443"
 
     def test_rejects_bad_command_template(self) -> None:
         with pytest.raises(ValueError, match="invalid command_template"):

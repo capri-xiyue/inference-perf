@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import aiohttp
 from google.protobuf.message import Message
 
-from inference_perf.config.datagen.toolexec import ActorConfig, SubstrateConfig
+from inference_perf.config.datagen.toolexec import SubstrateConfig
 from inference_perf.toolexec.substrate_executor import ExecResult, SubstrateBackend
 
 if TYPE_CHECKING:
@@ -154,13 +154,8 @@ def _read(path: str) -> bytes:
 
 
 class AteSubstrateBackend(SubstrateBackend):
-    def __init__(self, config: SubstrateConfig, actor: ActorConfig) -> None:
-        if not actor.atespace or not actor.template:
-            raise ValueError("actor.atespace and actor.template are required for the Substrate backend")
+    def __init__(self, config: SubstrateConfig) -> None:
         self.config = config
-        self.atespace: str = actor.atespace
-        self.template: str = actor.template
-        self.execute_path = actor.tool_call.execute_path
         self._msgs = build_ateapi_messages()
         self._channel: Optional["grpc.aio.Channel"] = None
         self._http: Optional[aiohttp.ClientSession] = None
@@ -207,14 +202,14 @@ class AteSubstrateBackend(SubstrateBackend):
         return self._http
 
     def _ref(self, name: str) -> Message:
-        return self._msgs["ObjectRef"](atespace=self.atespace, name=name)
+        return self._msgs["ObjectRef"](atespace=self.config.atespace, name=name)
 
     # ------------------------------------------------------------------ SubstrateBackend
 
     async def create_actor(self, name: str) -> None:
         actor = self._msgs["Actor"](
-            metadata=self._msgs["ResourceMetadata"](atespace=self.atespace, name=name),
-            actor_template=self._msgs["ObjectRef"](atespace=self.atespace, name=self.template),
+            metadata=self._msgs["ResourceMetadata"](atespace=self.config.atespace, name=name),
+            actor_template=self._msgs["ObjectRef"](atespace=self.config.atespace, name=self.config.actor_template),
         )
         await self._call("CreateActor", self._msgs["CreateActorRequest"](actor=actor), "Actor")
 
@@ -231,8 +226,8 @@ class AteSubstrateBackend(SubstrateBackend):
         await self._call("DeleteActor", self._msgs["DeleteActorRequest"](actor=self._ref(name)), "Actor")
 
     async def execute(self, name: str, command: str, timeout_sec: float) -> ExecResult:
-        url = self.config.router.url.rstrip("/") + self.execute_path
-        headers = {"ate-target-actor": f"{self.atespace}/{name}"}
+        url = self.config.router.url.rstrip("/") + self.config.router.execute_path
+        headers = {"ate-target-actor": f"{self.config.atespace}/{name}"}
         async with self._get_http().post(
             url, json={"command": command}, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout_sec)
         ) as resp:

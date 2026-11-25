@@ -39,8 +39,6 @@ data:
           type: substrate
           idle_gap_threshold_ms: 5000
           actor:
-            atespace: ip-bench
-            template: python-runtime
             name_prefix: ip
             suspend:
               between_turns: true
@@ -49,6 +47,8 @@ data:
             tool_call:
               command_template: "sleep {duration_sec:.3f}"
           substrate:
+            atespace: ip-bench
+            actor_template: python-runtime
             api:
               endpoint: api.ate-system.svc:443
               server_name: api.ate-system.svc

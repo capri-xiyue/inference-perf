@@ -155,8 +155,6 @@ These command line flags are automatically generated from the CLI parser. The gl
 | `--data.otel_trace_replay.skip_invalid_files` | boolean | Skip invalid trace files instead of failing |
 | `--data.otel_trace_replay.tool_executor.type` | Enum (substrate, fake_substrate) | Tool executor backend. |
 | `--data.otel_trace_replay.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no recorded gap kind or role:tool message to classify it, is treated as user idle time (a new turn). Shorter non-zero gaps are tool calls. |
-| `--data.otel_trace_replay.tool_executor.actor.atespace` | str | Atespace that holds the actors (required for type=substrate). |
-| `--data.otel_trace_replay.tool_executor.actor.template` | str | ActorTemplate (in the same atespace) every actor is created from (required for type=substrate). |
 | `--data.otel_trace_replay.tool_executor.actor.name_prefix` | str | Prefix for generated actor names. |
 | `--data.otel_trace_replay.tool_executor.actor.assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.otel_trace_replay.tool_executor.actor.assignment.rules` | JSON | Ordered rules; the first match wins. |
@@ -165,14 +163,16 @@ These command line flags are automatically generated from the CLI parser. The gl
 | `--data.otel_trace_replay.tool_executor.actor.suspend.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
 | `--data.otel_trace_replay.tool_executor.actor.tool_call.command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.otel_trace_replay.tool_executor.actor.tool_call.timeout_sec` | float | Timeout for one tool execution. |
-| `--data.otel_trace_replay.tool_executor.actor.tool_call.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.otel_trace_replay.tool_executor.actor.delete_on_session_end` | boolean | Delete a session's actors once it drains. |
+| `--data.otel_trace_replay.tool_executor.substrate.atespace` | str | Atespace that holds the actors. |
+| `--data.otel_trace_replay.tool_executor.substrate.actor_template` | str | ActorTemplate (in the same atespace) every actor is created from. |
 | `--data.otel_trace_replay.tool_executor.substrate.api.endpoint` | str | ateapi gRPC endpoint (host:port). |
 | `--data.otel_trace_replay.tool_executor.substrate.api.server_name` | str | TLS server name ateapi presents. |
 | `--data.otel_trace_replay.tool_executor.substrate.api.ca_path` | str | CA bundle that verifies ateapi (servicedns.podcert.ate.dev/identity ClusterTrustBundle). |
 | `--data.otel_trace_replay.tool_executor.substrate.api.token_path` | str | File holding a bearer JWT for ateapi, e.g. a projected SA token with audience api.ate-system.svc. |
 | `--data.otel_trace_replay.tool_executor.substrate.api.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to ateapi. |
 | `--data.otel_trace_replay.tool_executor.substrate.router.url` | str | atenet-router base URL. |
+| `--data.otel_trace_replay.tool_executor.substrate.router.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.otel_trace_replay.tool_executor.substrate.router.ca_path` | str | CA bundle that verifies atenet-router. |
 | `--data.otel_trace_replay.tool_executor.substrate.router.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router. |
 | `--data.otel_trace_replay.tool_executor.substrate.request_timeout_sec` | float | Timeout for a single control or data plane call. |
@@ -210,8 +210,6 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.weka_trace_replay.skip_invalid_files` | boolean | Skip invalid trace files instead of failing |
 | `--data.weka_trace_replay.tool_executor.type` | Enum (substrate, fake_substrate) | Tool executor backend. |
 | `--data.weka_trace_replay.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no recorded gap kind or role:tool message to classify it, is treated as user idle time (a new turn). Shorter non-zero gaps are tool calls. |
-| `--data.weka_trace_replay.tool_executor.actor.atespace` | str | Atespace that holds the actors (required for type=substrate). |
-| `--data.weka_trace_replay.tool_executor.actor.template` | str | ActorTemplate (in the same atespace) every actor is created from (required for type=substrate). |
 | `--data.weka_trace_replay.tool_executor.actor.name_prefix` | str | Prefix for generated actor names. |
 | `--data.weka_trace_replay.tool_executor.actor.assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.weka_trace_replay.tool_executor.actor.assignment.rules` | JSON | Ordered rules; the first match wins. |
@@ -220,14 +218,16 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.weka_trace_replay.tool_executor.actor.suspend.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
 | `--data.weka_trace_replay.tool_executor.actor.tool_call.command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.weka_trace_replay.tool_executor.actor.tool_call.timeout_sec` | float | Timeout for one tool execution. |
-| `--data.weka_trace_replay.tool_executor.actor.tool_call.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.weka_trace_replay.tool_executor.actor.delete_on_session_end` | boolean | Delete a session's actors once it drains. |
+| `--data.weka_trace_replay.tool_executor.substrate.atespace` | str | Atespace that holds the actors. |
+| `--data.weka_trace_replay.tool_executor.substrate.actor_template` | str | ActorTemplate (in the same atespace) every actor is created from. |
 | `--data.weka_trace_replay.tool_executor.substrate.api.endpoint` | str | ateapi gRPC endpoint (host:port). |
 | `--data.weka_trace_replay.tool_executor.substrate.api.server_name` | str | TLS server name ateapi presents. |
 | `--data.weka_trace_replay.tool_executor.substrate.api.ca_path` | str | CA bundle that verifies ateapi (servicedns.podcert.ate.dev/identity ClusterTrustBundle). |
 | `--data.weka_trace_replay.tool_executor.substrate.api.token_path` | str | File holding a bearer JWT for ateapi, e.g. a projected SA token with audience api.ate-system.svc. |
 | `--data.weka_trace_replay.tool_executor.substrate.api.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to ateapi. |
 | `--data.weka_trace_replay.tool_executor.substrate.router.url` | str | atenet-router base URL. |
+| `--data.weka_trace_replay.tool_executor.substrate.router.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.weka_trace_replay.tool_executor.substrate.router.ca_path` | str | CA bundle that verifies atenet-router. |
 | `--data.weka_trace_replay.tool_executor.substrate.router.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router. |
 | `--data.weka_trace_replay.tool_executor.substrate.request_timeout_sec` | float | Timeout for a single control or data plane call. |
@@ -272,8 +272,6 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.tracelab_trace_replay.skip_invalid_files` | boolean | Skip invalid trace files instead of failing |
 | `--data.tracelab_trace_replay.tool_executor.type` | Enum (substrate, fake_substrate) | Tool executor backend. |
 | `--data.tracelab_trace_replay.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no recorded gap kind or role:tool message to classify it, is treated as user idle time (a new turn). Shorter non-zero gaps are tool calls. |
-| `--data.tracelab_trace_replay.tool_executor.actor.atespace` | str | Atespace that holds the actors (required for type=substrate). |
-| `--data.tracelab_trace_replay.tool_executor.actor.template` | str | ActorTemplate (in the same atespace) every actor is created from (required for type=substrate). |
 | `--data.tracelab_trace_replay.tool_executor.actor.name_prefix` | str | Prefix for generated actor names. |
 | `--data.tracelab_trace_replay.tool_executor.actor.assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.tracelab_trace_replay.tool_executor.actor.assignment.rules` | JSON | Ordered rules; the first match wins. |
@@ -282,14 +280,16 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.tracelab_trace_replay.tool_executor.actor.suspend.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
 | `--data.tracelab_trace_replay.tool_executor.actor.tool_call.command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.tracelab_trace_replay.tool_executor.actor.tool_call.timeout_sec` | float | Timeout for one tool execution. |
-| `--data.tracelab_trace_replay.tool_executor.actor.tool_call.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.tracelab_trace_replay.tool_executor.actor.delete_on_session_end` | boolean | Delete a session's actors once it drains. |
+| `--data.tracelab_trace_replay.tool_executor.substrate.atespace` | str | Atespace that holds the actors. |
+| `--data.tracelab_trace_replay.tool_executor.substrate.actor_template` | str | ActorTemplate (in the same atespace) every actor is created from. |
 | `--data.tracelab_trace_replay.tool_executor.substrate.api.endpoint` | str | ateapi gRPC endpoint (host:port). |
 | `--data.tracelab_trace_replay.tool_executor.substrate.api.server_name` | str | TLS server name ateapi presents. |
 | `--data.tracelab_trace_replay.tool_executor.substrate.api.ca_path` | str | CA bundle that verifies ateapi (servicedns.podcert.ate.dev/identity ClusterTrustBundle). |
 | `--data.tracelab_trace_replay.tool_executor.substrate.api.token_path` | str | File holding a bearer JWT for ateapi, e.g. a projected SA token with audience api.ate-system.svc. |
 | `--data.tracelab_trace_replay.tool_executor.substrate.api.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to ateapi. |
 | `--data.tracelab_trace_replay.tool_executor.substrate.router.url` | str | atenet-router base URL. |
+| `--data.tracelab_trace_replay.tool_executor.substrate.router.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.tracelab_trace_replay.tool_executor.substrate.router.ca_path` | str | CA bundle that verifies atenet-router. |
 | `--data.tracelab_trace_replay.tool_executor.substrate.router.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router. |
 | `--data.tracelab_trace_replay.tool_executor.substrate.request_timeout_sec` | float | Timeout for a single control or data plane call. |
@@ -379,8 +379,6 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.synthetic_agentic.skip_invalid_files` | boolean | Not applicable to synthetic generation (pinned False): sessions are generated in-memory, not loaded from trace files, so there are no invalid files to skip. |
 | `--data.synthetic_agentic.tool_executor.type` | Enum (substrate, fake_substrate) | Tool executor backend. |
 | `--data.synthetic_agentic.tool_executor.idle_gap_threshold_ms` | int | A gap at least this long, with no recorded gap kind or role:tool message to classify it, is treated as user idle time (a new turn). Shorter non-zero gaps are tool calls. |
-| `--data.synthetic_agentic.tool_executor.actor.atespace` | str | Atespace that holds the actors (required for type=substrate). |
-| `--data.synthetic_agentic.tool_executor.actor.template` | str | ActorTemplate (in the same atespace) every actor is created from (required for type=substrate). |
 | `--data.synthetic_agentic.tool_executor.actor.name_prefix` | str | Prefix for generated actor names. |
 | `--data.synthetic_agentic.tool_executor.actor.assignment.default` | Enum (session, dedicated) | Assignment when no rule matches. |
 | `--data.synthetic_agentic.tool_executor.actor.assignment.rules` | JSON | Ordered rules; the first match wins. |
@@ -389,14 +387,16 @@ Security: Filter expressions use eval() and should only contain trusted input. |
 | `--data.synthetic_agentic.tool_executor.actor.suspend.snapshot_durability` | Enum (async, sync) | When SuspendActor returns relative to its snapshot reaching durable storage. |
 | `--data.synthetic_agentic.tool_executor.actor.tool_call.command_template` | str | Command run in the actor for a tool gap. {duration_sec} is the recorded (capped) gap length. |
 | `--data.synthetic_agentic.tool_executor.actor.tool_call.timeout_sec` | float | Timeout for one tool execution. |
-| `--data.synthetic_agentic.tool_executor.actor.tool_call.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.synthetic_agentic.tool_executor.actor.delete_on_session_end` | boolean | Delete a session's actors once it drains. |
+| `--data.synthetic_agentic.tool_executor.substrate.atespace` | str | Atespace that holds the actors. |
+| `--data.synthetic_agentic.tool_executor.substrate.actor_template` | str | ActorTemplate (in the same atespace) every actor is created from. |
 | `--data.synthetic_agentic.tool_executor.substrate.api.endpoint` | str | ateapi gRPC endpoint (host:port). |
 | `--data.synthetic_agentic.tool_executor.substrate.api.server_name` | str | TLS server name ateapi presents. |
 | `--data.synthetic_agentic.tool_executor.substrate.api.ca_path` | str | CA bundle that verifies ateapi (servicedns.podcert.ate.dev/identity ClusterTrustBundle). |
 | `--data.synthetic_agentic.tool_executor.substrate.api.token_path` | str | File holding a bearer JWT for ateapi, e.g. a projected SA token with audience api.ate-system.svc. |
 | `--data.synthetic_agentic.tool_executor.substrate.api.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to ateapi. |
 | `--data.synthetic_agentic.tool_executor.substrate.router.url` | str | atenet-router base URL. |
+| `--data.synthetic_agentic.tool_executor.substrate.router.execute_path` | str | Path of the tool runtime's execute endpoint inside the actor (agent-sandbox runtime API). |
 | `--data.synthetic_agentic.tool_executor.substrate.router.ca_path` | str | CA bundle that verifies atenet-router. |
 | `--data.synthetic_agentic.tool_executor.substrate.router.cert_bundle_path` | str | Pod certificate credential bundle (key + chain PEM) for mTLS to atenet-router. |
 | `--data.synthetic_agentic.tool_executor.substrate.request_timeout_sec` | float | Timeout for a single control or data plane call. |
