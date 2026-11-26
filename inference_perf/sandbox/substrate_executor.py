@@ -36,6 +36,21 @@ logger = logging.getLogger(__name__)
 
 _NAME_UNSAFE = re.compile(r"[^a-z0-9-]+")
 
+# Longest single execute call. atenet-router answers 504 to requests that run
+# past ~300s, so a longer tool is replayed as consecutive sleeps of at most this.
+MAX_EXEC_CHUNK_SEC = 240.0
+
+
+def _sleep_chunks(duration_sec: float) -> List[float]:
+    """Split a replayed tool duration into router-safe sleeps (at least one, possibly zero-length)."""
+    chunks: List[float] = []
+    remaining = max(duration_sec, 0.0)
+    while remaining > MAX_EXEC_CHUNK_SEC:
+        chunks.append(MAX_EXEC_CHUNK_SEC)
+        remaining -= MAX_EXEC_CHUNK_SEC
+    chunks.append(remaining)
+    return chunks
+
 
 @dataclass(frozen=True)
 class ExecResult:
@@ -230,10 +245,13 @@ class SubstrateToolExecutor(ToolExecutor):
         delay = gap_start + planned.start_sec - _now()
         if delay > 0:
             await asyncio.sleep(delay)
-        command = f"sleep {planned.duration_sec:.3f}"
         t0 = _now()
+        result = ExecResult(exit_code=0)
         try:
-            result = await self.backend.execute(actor.name, command, self.config.actor.tool_call.timeout_sec)
+            for chunk in _sleep_chunks(planned.duration_sec):
+                result = await self.backend.execute(actor.name, f"sleep {chunk:.3f}", self.config.actor.tool_call.timeout_sec)
+                if result.exit_code != 0:
+                    break
         except asyncio.CancelledError:
             raise
         except Exception as e:

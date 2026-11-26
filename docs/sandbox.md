@@ -163,7 +163,15 @@ data:
     trace_files: [/data/tracelab.jsonl]
     filter: "lambda x: x['max_tokens'] < 262144"   # skip sessions that do not fit the model
     trace_idle_gap_cap_seconds: null               # replay every gap as recorded
+    predecessor_wait_timeout_sec: 86400            # uncapped sessions can run past the 1h default
 ```
+
+With uncapped gaps a session can run for hours; raise
+`predecessor_wait_timeout_sec` (default 3600s), or events still waiting on a
+predecessor after an hour fail the session. Tools longer than 240s are replayed
+as consecutive sleeps of at most 240s, because atenet-router answers 504 to
+requests that run past ~300s; each extra call adds one router round trip to
+the tool's overhead.
 
 `type: fake_substrate` runs the same lifecycle against an in-process stand-in
 whose latencies come from `sandbox.fake` (create, cold / warm resume, snapshot

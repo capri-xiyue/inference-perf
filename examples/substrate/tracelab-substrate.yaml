@@ -27,6 +27,7 @@ data:
     static_model_name: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
     filter: "lambda x: x['max_tokens'] < 262144"
     trace_idle_gap_cap_seconds: null
+    predecessor_wait_timeout_sec: 86400            # sessions run for hours when every gap is replayed
 sandbox:
   type: substrate
   actor:

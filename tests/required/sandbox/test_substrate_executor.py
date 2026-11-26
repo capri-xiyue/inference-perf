@@ -276,6 +276,27 @@ class TestSubstrateExecutor:
         assert metrics.tools[0].error is not None and "router 503" in metrics.tools[0].error
 
 
+class TestSleepChunks:
+    def test_long_tools_are_split_under_the_router_timeout(self) -> None:
+        from inference_perf.sandbox.substrate_executor import MAX_EXEC_CHUNK_SEC, _sleep_chunks
+
+        assert _sleep_chunks(0.0) == [0.0]
+        assert _sleep_chunks(1.5) == [1.5]
+        chunks = _sleep_chunks(2 * MAX_EXEC_CHUNK_SEC + 7.0)
+        assert chunks == [MAX_EXEC_CHUNK_SEC, MAX_EXEC_CHUNK_SEC, pytest.approx(7.0)]
+        assert all(c <= MAX_EXEC_CHUNK_SEC for c in chunks)
+
+    async def test_executor_issues_one_call_per_chunk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import inference_perf.sandbox.substrate_executor as mod
+
+        monkeypatch.setattr(mod, "MAX_EXEC_CHUNK_SEC", 0.02)
+        executor, backend = _executor()
+        await executor.run_gap(_ctx(GapKind.IDLE))
+        m = await executor.run_gap(_ctx(GapKind.TOOL, tools=(PlannedTool("Bash", 0.0, 0.05),)))
+        assert _ops(backend).count("execute") == 3  # 0.02 + 0.02 + 0.01
+        assert m.tools[0].tool_exec_sec is not None and m.tools[0].tool_exec_sec >= 0.05
+
+
 class TestConfig:
     def test_substrate_type_requires_substrate_block(self) -> None:
         with pytest.raises(ValueError, match="sandbox.substrate is required"):
